@@ -40,7 +40,12 @@ Worker ayarları (`compose.yml` içinde `worker.environment` altına eklenebilir
 | `VIDEO_CRF` | 18 | Çıktı kalitesi (düşük = daha iyi) |
 | `ENHANCER_BLEND` | 0.8 | GFPGAN karışım oranı |
 | `MIN_FACE_AGE` | 18 | Bu yaşın altında tahmin edilen yüzler reddedilir |
-| `WATERMARK_TEXT` | AI GENERATED | Boş bırakılırsa filigran kapanır |
+| `WATERMARK_TEXT` | (boş) | Doldurulursa sağ alta görünür filigran eklenir |
+| `AI_METADATA_TAG` | AI-generated content (FaceSwap) | Çıktının metadata `comment` etiketi; boş bırakılırsa yazılmaz |
+| `CLUSTER_THRESHOLD` | 0.4 | Analizde iki yüzü aynı kişi saymak için ArcFace benzerliği |
+| `MATCH_THRESHOLD` | 0.3 | Render'da bir yüzü seçilen kişi saymak için benzerlik (düşük = profil açıları da yakalanır) |
+| `ANALYSIS_SAMPLES_PER_SECOND` | 2 | Kişi analizinde saniye başına örnek kare |
+| `ANALYSIS_MAX_SAMPLES` | 120 | Kişi analizinde en fazla örnek kare |
 
 ## Portlar
 
