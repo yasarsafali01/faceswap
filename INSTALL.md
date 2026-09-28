@@ -90,6 +90,7 @@ docker run --rm -v "$PWD/backend:/src" -w /src maven:3.9-eclipse-temurin-21 mvn 
 - Docker Desktop'ta WSL2 backend'i açık olmalı. GPU sürücüsü Windows tarafına kurulur, WSL2'ye ayrıca kurulmaz.
 - GPU'nun container'dan göründüğünü kontrol edin: `docker run --rm --gpus all nvidia/cuda:13.0.2-base-ubuntu24.04 nvidia-smi`
 - 5432 portu Windows'ta rezerve olabildiği için PostgreSQL host'ta 15432'den açılır.
+- Docker imajları (worker ~10 GB) ve build cache hızla büyür. C: diski dolarsa Docker çöker; Docker Desktop > Settings > Resources > Advanced > **Disk image location** ile disk dosyasını daha büyük bir sürücüye taşıyın. Silinen imajlar yer açmaz, Windows tarafındaki VHDX kendiliğinden küçülmez.
 
 ### Sorun Giderme
 
