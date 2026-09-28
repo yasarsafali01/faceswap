@@ -14,19 +14,19 @@ GPU yoksa worker otomatik olarak CPU'ya düşer (`/health` cevabında `providers
 `.env.example` dosyasını `.env` olarak kopyalayıp secret'ları değiştirin:
 
 ```env
-POSTGRES_DB=faceswap
-POSTGRES_USER=faceswap
-POSTGRES_PASSWORD=change-me
+POSTGRES_DB=####
+POSTGRES_USER=####
+POSTGRES_PASSWORD=####
 
-RABBITMQ_USER=faceswap
-RABBITMQ_PASSWORD=change-me
+RABBITMQ_USER=####
+RABBITMQ_PASSWORD=####
 
-MINIO_ROOT_USER=faceswap
-MINIO_ROOT_PASSWORD=change-me-min-8-chars
-MINIO_BUCKET=faceswap
+MINIO_ROOT_USER=####
+MINIO_ROOT_PASSWORD=####
+MINIO_BUCKET=####
 
 # En az 32 byte: openssl rand -base64 48
-JWT_SECRET=change-me-to-a-long-random-string-of-at-least-32-bytes
+JWT_SECRET=####
 ```
 
 Worker ayarları (`compose.yml` içinde `worker.environment` altına eklenebilir):
@@ -55,11 +55,11 @@ Worker ayarları (`compose.yml` içinde `worker.environment` altına eklenebilir
 
 | Servis | Adres | Not |
 |---|---|---|
-| Web + API gateway | http://localhost:8080 | Dışarıya açık tek port |
-| Backend (doğrudan) | http://127.0.0.1:8081 | Geliştirme için |
-| PostgreSQL | 127.0.0.1:15432 | |
-| RabbitMQ yönetim | http://127.0.0.1:15672 | `.env` kullanıcısı |
-| MinIO konsol | http://127.0.0.1:9001 | `.env` kullanıcısı |
+| Web + API gateway | http://localhost:#### | Dışarıya açık tek port |
+| Backend (doğrudan) | http://127.0.0.1:#### | Geliştirme için |
+| PostgreSQL | 127.0.0.1:#### | |
+| RabbitMQ yönetim | http://127.0.0.1:#### | `.env` kullanıcısı |
+| MinIO konsol | http://127.0.0.1:#### | `.env` kullanıcısı |
 
 ## Veritabanı
 
@@ -74,7 +74,7 @@ Worker ilk açılışta modelleri `models` Docker volume'üne indirir: InsightFa
 Altyapı ve worker Docker'da çalışırken web'i hot-reload ile geliştirmek için:
 
 ```bash
-cd frontend && npm install && npm run dev   # http://localhost:5173, /api -> 127.0.0.1:8081
+cd frontend && npm install && npm run dev   # http://localhost:####, /api -> 127.0.0.1:####
 ```
 
 Backend testleri (Maven kurulu değilse Docker ile):
@@ -89,7 +89,7 @@ docker run --rm -v "$PWD/backend:/src" -w /src maven:3.9-eclipse-temurin-21 mvn 
 
 - Docker Desktop'ta WSL2 backend'i açık olmalı. GPU sürücüsü Windows tarafına kurulur, WSL2'ye ayrıca kurulmaz.
 - GPU'nun container'dan göründüğünü kontrol edin: `docker run --rm --gpus all nvidia/cuda:13.0.2-base-ubuntu24.04 nvidia-smi`
-- 5432 portu Windows'ta rezerve olabildiği için PostgreSQL host'ta 15432'den açılır.
+- PostgreSQL'in varsayılan portu Windows'ta rezerve olabildiği için host'ta farklı bir porttan açılır (bkz. `compose.yml`).
 - Docker imajları (worker ~10 GB) ve build cache hızla büyür. C: diski dolarsa Docker çöker; Docker Desktop > Settings > Resources > Advanced > **Disk image location** ile disk dosyasını daha büyük bir sürücüye taşıyın. Silinen imajlar yer açmaz, Windows tarafındaki VHDX kendiliğinden küçülmez.
 
 ### Sorun Giderme

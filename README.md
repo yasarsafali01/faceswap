@@ -10,7 +10,7 @@ Kullanıcının yüklediği videodaki kişilerin yüzlerini, verdiği fotoğrafl
 ## Mimari
 
 ```text
-Tarayıcı -> nginx gateway (:8080) -> Spring Boot API -> PostgreSQL | Redis | MinIO
+Tarayıcı -> nginx gateway (:####) -> Spring Boot API -> PostgreSQL | Redis | MinIO
                                           |  RabbitMQ
                                           v
                                GPU Worker (Python + ONNX Runtime CUDA + FFmpeg)
@@ -61,7 +61,7 @@ cp .env.example .env   # secret'ları değiştirin
 docker compose up -d --build
 ```
 
-Uygulama: http://localhost:8080 (hesap oluşturup giriş yapın). İlk açılışta worker modelleri indirir (~1 GB), `docker compose logs -f worker` ile izlenebilir.
+Uygulama: http://localhost:#### (hesap oluşturup giriş yapın). İlk açılışta worker modelleri indirir (~1 GB), `docker compose logs -f worker` ile izlenebilir.
 
 NVIDIA GPU, sürücü, ortam değişkenleri ve worker ayarları için: [INSTALL.md](INSTALL.md)
 

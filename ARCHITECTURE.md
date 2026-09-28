@@ -5,7 +5,7 @@ Kullanıcı bir video + kaynak yüz fotoğrafı yükler; videodaki yüzler kayna
 ## Genel Akış
 
 ```text
-React Web (nginx gateway :8080)
+React Web (nginx gateway :####)
    /api, /ws -> Spring Boot Backend -> PostgreSQL | Redis | MinIO
                       | video.analyze (upload sonrası)      | job.requested (kullanıcı başlatınca)
                       v                                      v
@@ -121,7 +121,7 @@ WS   /ws (STOMP)          CONNECT header: Authorization: Bearer <token>; SUBSCRI
 - Rate limit (Redis, sabit pencere): auth 20/dk/IP, upload 60/saat, job 30/saat/kullanıcı; kullanıcı başına 3 aktif job.
 - Dosya tipi magic byte ile tespit edilir (Tika + ISO-BMFF brand kontrolü), istemcinin bildirdiği tipe güvenilmez. Video 200 MB, görsel 10 MB.
 - BCrypt, kullanıcı enumerasyonuna karşı sabit süreli login, WebSocket'te sadece `/user/**` abonelikleri.
-- Servis portları sadece `127.0.0.1`'e açık; dışarıya sadece gateway (8080).
+- Servis portları sadece `127.0.0.1`'e açık; dışarıya sadece gateway (####).
 - Eksik (canlı öncesi): HTTPS terminasyonu, zararlı dosya taraması, genel audit log, API key yönetimi.
 
 ### Kötüye kullanım önlemleri
