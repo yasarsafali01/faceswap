@@ -1,0 +1,44 @@
+# Build outputs
+dist/
+build/
+out/
+.next/
+.expo/
+target/
+*.class
+*.o
+*.a
+*.so
+__pycache__/
+*.pyc
+
+# Dependencies
+node_modules/
+vendor/
+.venv/
+
+# Env & secrets
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+
+# IDE & OS
+.idea/
+.vscode/
+*.suo
+*.user
+.DS_Store
+Thumbs.db
+
+# Claude
+.claude/
+CLAUDE.md
+
+# AI models & runtime data (large binaries)
+models/
+*.onnx
+*.pth
+data/
+tmp/
