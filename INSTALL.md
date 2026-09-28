@@ -9,27 +9,29 @@
 
 GPU yoksa worker otomatik olarak CPU'ya düşer (`/health` cevabında `providers` alanına bakın), ama bu durumda çok yavaş çalışır.
 
-## Ortam Değişkenleri
+## Yapılandırma (tek kaynak: `.env`)
 
-`.env.example` dosyasını `.env` olarak kopyalayıp secret'ları değiştirin:
+Tüm ayarlar proje kökündeki **`.env`** dosyasından okunur; kodda veya `compose.yml`'de değer değiştirmeye gerek yoktur. Şablon ve her değişkenin açıklaması: [`.env.example`](.env.example).
 
-```env
-POSTGRES_DB=####
-POSTGRES_USER=####
-POSTGRES_PASSWORD=####
-
-RABBITMQ_USER=####
-RABBITMQ_PASSWORD=####
-
-MINIO_ROOT_USER=####
-MINIO_ROOT_PASSWORD=####
-MINIO_BUCKET=####
-
-# En az 32 byte: openssl rand -base64 48
-JWT_SECRET=####
+```bash
+cp .env.example .env      # sonra şifreleri ve gerekirse portları değiştirin
+docker compose up -d      # değişiklikten sonra ilgili servisleri yeniden oluşturur
 ```
 
-Worker ayarları (`compose.yml` içinde `worker.environment` altına eklenebilir):
+| Bölüm | Değişkenler |
+|---|---|
+| Dışarı açılan portlar | `WEB_PORT`, `BIND_ADDRESS`, `BACKEND_HOST_PORT`, `POSTGRES_HOST_PORT`, `RABBITMQ_UI_HOST_PORT`, `MINIO_CONSOLE_HOST_PORT`, `DEV_WEB_PORT` |
+| Container içi portlar | `BACKEND_PORT`, `WORKER_HEALTH_PORT` |
+| PostgreSQL | `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` |
+| Redis / RabbitMQ | `REDIS_HOST`, `REDIS_PORT`, `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_USER`, `RABBITMQ_PASSWORD` |
+| Nesne depolama | `MINIO_ENDPOINT` (harici S3 için `https://...`), `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`, `MINIO_BUCKET` |
+| Güvenlik | `JWT_SECRET` (en az 32 byte), `JWT_ACCESS_TTL`, `JWT_REFRESH_TTL`, `MEDIA_LINK_TTL` |
+| Limitler | `MAX_VIDEO_MB`, `MAX_IMAGE_MB`, `MAX_UPLOAD_MB`, `MAX_DURATION_SECONDS`, `MAX_ACTIVE_JOBS_PER_USER`, `RATE_LIMIT_*` |
+| GPU worker | aşağıdaki tablo |
+
+Arayüzde gösterilen limitler (dosya boyutu, süre) de backend'den (`GET /api/config`) okunur; UI'da sabit değer yoktur. Değer değiştirdikten sonra `docker compose up -d` yeterlidir, yeniden build gerekmez.
+
+Worker ayarları:
 
 | Değişken | Varsayılan | Açıklama |
 |---|---|---|
@@ -53,13 +55,16 @@ Worker ayarları (`compose.yml` içinde `worker.environment` altına eklenebilir
 
 ## Portlar
 
-| Servis | Adres | Not |
-|---|---|---|
-| Web + API gateway | http://localhost:#### | Dışarıya açık tek port |
-| Backend (doğrudan) | http://127.0.0.1:#### | Geliştirme için |
-| PostgreSQL | 127.0.0.1:#### | |
-| RabbitMQ yönetim | http://127.0.0.1:#### | `.env` kullanıcısı |
-| MinIO konsol | http://127.0.0.1:#### | `.env` kullanıcısı |
+Tüm portlar `.env`'den gelir; aşağıda hangi değişkenin hangi servise ait olduğu var.
+
+| Servis | Adres | `.env` değişkeni | Not |
+|---|---|---|---|
+| Web + API gateway | http://localhost:#### | `WEB_PORT` | Dışarıya açık tek port |
+| Backend (doğrudan) | http://`BIND_ADDRESS`:#### | `BACKEND_HOST_PORT` | Geliştirme için |
+| PostgreSQL | `BIND_ADDRESS`:#### | `POSTGRES_HOST_PORT` | |
+| RabbitMQ yönetim | http://`BIND_ADDRESS`:#### | `RABBITMQ_UI_HOST_PORT` | `.env` kullanıcısı |
+| MinIO konsol | http://`BIND_ADDRESS`:#### | `MINIO_CONSOLE_HOST_PORT` | `.env` kullanıcısı |
+| Web geliştirme sunucusu | http://localhost:#### | `DEV_WEB_PORT` | `npm run dev` |
 
 ## Veritabanı
 

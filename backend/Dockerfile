@@ -10,5 +10,5 @@ RUN addgroup -S app && adduser -S app -G app
 WORKDIR /app
 COPY --from=build /src/target/backend-*.jar app.jar
 USER app
-EXPOSE 8080
+# Listening port comes from BACKEND_PORT in .env.
 ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-jar", "app.jar"]

@@ -9,19 +9,29 @@ def _env(name: str, default: str | None = None) -> str:
     return value
 
 
+def _endpoint() -> tuple[str, bool]:
+    """MINIO_ENDPOINT is shared with the backend and given as a URL (http://minio:9000);
+    the MinIO SDK wants host:port plus a TLS flag."""
+    value = _env("MINIO_ENDPOINT", "http://localhost:9000")
+    secure = value.startswith("https://")
+    return value.split("://", 1)[-1].rstrip("/"), secure
+
+
 @dataclass(frozen=True)
 class Settings:
-    worker_id: str = field(default_factory=lambda: _env("WORKER_ID", "worker-1"))
+    # Compose sets HOSTNAME to the container id, which keeps scaled workers distinguishable.
+    worker_id: str = field(default_factory=lambda: _env("WORKER_ID", os.getenv("HOSTNAME", "worker")))
 
     rabbitmq_host: str = field(default_factory=lambda: _env("RABBITMQ_HOST", "localhost"))
+    rabbitmq_port: int = field(default_factory=lambda: int(_env("RABBITMQ_PORT", "5672")))
     rabbitmq_user: str = field(default_factory=lambda: _env("RABBITMQ_USER", "guest"))
     rabbitmq_password: str = field(default_factory=lambda: _env("RABBITMQ_PASSWORD", "guest"))
 
-    minio_endpoint: str = field(default_factory=lambda: _env("MINIO_ENDPOINT", "localhost:9000"))
-    minio_access_key: str = field(default_factory=lambda: _env("MINIO_ACCESS_KEY", "minioadmin"))
-    minio_secret_key: str = field(default_factory=lambda: _env("MINIO_SECRET_KEY", "minioadmin"))
+    minio_endpoint: str = field(default_factory=lambda: _endpoint()[0])
+    minio_secure: bool = field(default_factory=lambda: _endpoint()[1])
+    minio_access_key: str = field(default_factory=lambda: _env("MINIO_ROOT_USER", "minioadmin"))
+    minio_secret_key: str = field(default_factory=lambda: _env("MINIO_ROOT_PASSWORD", "minioadmin"))
     minio_bucket: str = field(default_factory=lambda: _env("MINIO_BUCKET", "faceswap"))
-    minio_secure: bool = field(default_factory=lambda: _env("MINIO_SECURE", "false").lower() == "true")
 
     models_dir: str = field(default_factory=lambda: _env("MODELS_DIR", "/models"))
     work_dir: str = field(default_factory=lambda: _env("WORK_DIR", "/tmp/faceswap"))

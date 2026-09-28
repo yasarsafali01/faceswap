@@ -1,12 +1,14 @@
+# All values come from environment variables defined in the repo root .env (see .env.example).
+# Defaults here only serve running the jar outside Docker.
 server:
-  port: 8080
+  port: ${BACKEND_PORT:8080}
   forward-headers-strategy: framework
 
 spring:
   application:
     name: faceswap-backend
   datasource:
-    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:5432/${POSTGRES_DB:faceswap}
+    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:faceswap}
     username: ${POSTGRES_USER:faceswap}
     password: ${POSTGRES_PASSWORD:faceswap}
   jpa:
@@ -17,14 +19,15 @@ spring:
     enabled: true
   servlet:
     multipart:
-      max-file-size: 200MB
-      max-request-size: 210MB
+      max-file-size: ${MAX_UPLOAD_MB:210}MB
+      max-request-size: ${MAX_UPLOAD_MB:210}MB
   data:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
   rabbitmq:
     host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
     username: ${RABBITMQ_USER:guest}
     password: ${RABBITMQ_PASSWORD:guest}
     listener:
@@ -40,19 +43,20 @@ management:
 app:
   jwt:
     secret: ${JWT_SECRET}
-    access-ttl: 15m
-    refresh-ttl: 30d
-    media-ttl: 2h
+    access-ttl: ${JWT_ACCESS_TTL:15m}
+    refresh-ttl: ${JWT_REFRESH_TTL:30d}
+    media-ttl: ${MEDIA_LINK_TTL:2h}
   storage:
     endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
-    access-key: ${MINIO_ACCESS_KEY:minioadmin}
-    secret-key: ${MINIO_SECRET_KEY:minioadmin}
+    access-key: ${MINIO_ROOT_USER:minioadmin}
+    secret-key: ${MINIO_ROOT_PASSWORD:minioadmin}
     bucket: ${MINIO_BUCKET:faceswap}
   limits:
-    max-video-bytes: 209715200
-    max-image-bytes: 10485760
-    max-active-jobs-per-user: 3
+    max-video-mb: ${MAX_VIDEO_MB:200}
+    max-image-mb: ${MAX_IMAGE_MB:10}
+    max-duration-seconds: ${MAX_DURATION_SECONDS:180}
+    max-active-jobs-per-user: ${MAX_ACTIVE_JOBS_PER_USER:3}
   rate-limit:
-    auth-per-minute: 20
-    uploads-per-hour: 60
-    jobs-per-hour: 30
+    auth-per-minute: ${RATE_LIMIT_AUTH_PER_MINUTE:20}
+    uploads-per-hour: ${RATE_LIMIT_UPLOADS_PER_HOUR:60}
+    jobs-per-hour: ${RATE_LIMIT_JOBS_PER_HOUR:30}

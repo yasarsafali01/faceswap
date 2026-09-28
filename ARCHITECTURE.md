@@ -135,6 +135,8 @@ WS   /ws (STOMP)          CONNECT header: Authorization: Bearer <token>; SUBSCRI
 
 ## Deployment
 
+Yapılandırmanın tek kaynağı kökteki `.env`'dir (şablon: `.env.example`): portlar, servis adresleri, kullanıcılar, secret'lar, limitler ve worker ayarları. `compose.yml` değerleri `${VAR}` ile alır, backend ve worker `env_file: .env` ile okur, nginx config'i şablondan (`BACKEND_PORT`, `MAX_UPLOAD_MB`) üretilir, Vite dev sunucusu `.env`'i `loadEnv` ile okur, UI limitleri `GET /api/config`'ten gelir. Kodda sabit port/kullanıcı/limit yoktur.
+
 `compose.yml` servisleri: `postgres, redis, rabbitmq, minio, backend, worker, frontend`. Worker ölçekleme: `docker compose up -d --scale worker=N` (her worker `prefetch=1`, aynı GPU'yu paylaşırlar; asıl ölçek birden fazla GPU/makine ile).
 
 Kubernetes (Faz 3): `frontend-deployment, backend-deployment, worker-deployment (GPU node pool), postgres-statefulset, redis-deployment, rabbitmq-deployment, minio-deployment`.

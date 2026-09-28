@@ -1,11 +1,15 @@
 import { useCallback, useEffect, useState } from 'react'
-import { api, faceOptions, upload, type FaceOption, type FacePhoto, type Job, type Video } from '../api'
+import { api, faceOptions, upload, type FaceOption, type FacePhoto, type Job, type PublicConfig, type Video } from '../api'
 import { useAuth } from '../auth'
 import Dropzone from '../components/Dropzone'
 import FaceLibrary, { type PendingUpload } from '../components/FaceLibrary'
 import JobCard from '../components/JobCard'
 import PeopleAssigner, { type Assignments } from '../components/PeopleAssigner'
 import { useJobUpdates } from '../useJobUpdates'
+
+function formatDuration(seconds: number): string {
+  return seconds % 60 === 0 ? `${seconds / 60} dakika` : `${seconds} saniye`
+}
 
 export default function Studio() {
   const { user, logout } = useAuth()
@@ -39,6 +43,12 @@ export default function Studio() {
   useEffect(() => {
     void loadJobs()
   }, [loadJobs])
+
+  // Limits live in .env on the server; the UI only displays them.
+  const [limits, setLimits] = useState<PublicConfig | null>(null)
+  useEffect(() => {
+    api<PublicConfig>('/api/config').then(setLimits).catch(() => {})
+  }, [])
 
   // The worker analyzes each uploaded video to find the people in it; poll until it's done.
   const videoId = video?.id
@@ -171,7 +181,11 @@ export default function Studio() {
           <Dropzone
             kind="video"
             title="1. Video"
-            hint="MP4, MOV, WEBM · en fazla 200 MB · 3 dakika"
+            hint={
+              limits
+                ? `MP4, MOV, WEBM · en fazla ${limits.maxVideoMb} MB · ${formatDuration(limits.maxDurationSeconds)}`
+                : 'MP4, MOV, WEBM'
+            }
             accept="video/mp4,video/quicktime,video/webm,video/x-matroska"
             value={video}
             onChange={changeVideo}

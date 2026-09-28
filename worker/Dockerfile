@@ -20,5 +20,5 @@ RUN pip install -r requirements.txt -c constraints.txt \
 
 COPY app ./app
 
-EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Port comes from WORKER_HEALTH_PORT in .env; shell form so the variable is expanded at start.
+CMD uvicorn app.main:app --host 0.0.0.0 --port ${WORKER_HEALTH_PORT:-8000}

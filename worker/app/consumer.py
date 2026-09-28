@@ -44,6 +44,7 @@ class Consumer:
     def _consume(self) -> None:
         params = pika.ConnectionParameters(
             host=settings.rabbitmq_host,
+            port=settings.rabbitmq_port,
             credentials=pika.PlainCredentials(settings.rabbitmq_user, settings.rabbitmq_password),
             heartbeat=60,
             blocked_connection_timeout=300,

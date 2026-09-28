@@ -17,6 +17,9 @@ export type Video = MediaFile & {
   faces: VideoFace[]
 }
 
+/** Server-side limits from .env, exposed by GET /api/config. */
+export type PublicConfig = { maxVideoMb: number; maxImageMb: number; maxDurationSeconds: number; maxActiveJobsPerUser: number }
+
 export type Detection = { index: number; url: string }
 
 /** An uploaded source photo; detections are the faces in it, largest first, once analyzed. */

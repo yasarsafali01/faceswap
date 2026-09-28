@@ -19,8 +19,8 @@ vendor/
 
 # Env & secrets
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 *.key
 *.pem
 
