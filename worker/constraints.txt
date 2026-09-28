@@ -1,0 +1,3 @@
+# insightface 0.7.3 predates NumPy 2, and albumentations would otherwise pull the GUI OpenCV build.
+numpy==1.26.4
+opencv-python-headless==4.10.0.84
