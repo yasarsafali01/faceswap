@@ -9,6 +9,8 @@ import com.faceswap.job.JobDtos.SwapRequest;
 import com.faceswap.job.JobMessages.JobRequest;
 import com.faceswap.job.JobMessages.SwapSpec;
 import com.faceswap.media.Face;
+import com.faceswap.media.FaceDetection;
+import com.faceswap.media.FaceDetectionRepository;
 import com.faceswap.media.FaceRepository;
 import com.faceswap.media.MediaService;
 import com.faceswap.media.Video;
@@ -38,6 +40,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 @Service
 public class JobService {
@@ -51,20 +54,23 @@ public class JobService {
     private final VideoRepository videos;
     private final FaceRepository faces;
     private final VideoFaceRepository videoFaces;
+    private final FaceDetectionRepository detections;
     private final MediaService mediaService;
     private final RabbitTemplate rabbit;
     private final StringRedisTemplate redis;
     private final AppProperties.Limits limits;
 
     public JobService(JobRepository jobs, JobSwapRepository jobSwaps, JobLogRepository jobLogs, VideoRepository videos,
-                      FaceRepository faces, VideoFaceRepository videoFaces, MediaService mediaService,
-                      RabbitTemplate rabbit, StringRedisTemplate redis, AppProperties properties) {
+                      FaceRepository faces, VideoFaceRepository videoFaces, FaceDetectionRepository detections,
+                      MediaService mediaService, RabbitTemplate rabbit, StringRedisTemplate redis,
+                      AppProperties properties) {
         this.jobs = jobs;
         this.jobSwaps = jobSwaps;
         this.jobLogs = jobLogs;
         this.videos = videos;
         this.faces = faces;
         this.videoFaces = videoFaces;
+        this.detections = detections;
         this.mediaService = mediaService;
         this.rabbit = rabbit;
         this.redis = redis;
@@ -94,19 +100,23 @@ public class JobService {
         }
 
         List<Integer> targets = resolveTargets(video, requested);
+        List<String> sourceKeys = requested.stream()
+                .map(s -> sourceKey(sourceFaces.get(s.faceId()), s.sourceFaceIndex())).toList();
         // jobs.face_id / target_face_index keep the first assignment for older readers of the table.
         Job job = jobs.save(new Job(userId, video.getId(), requested.get(0).faceId(),
                 req.enhance() == null || req.enhance(), targets.get(0)));
         List<JobSwap> swaps = new ArrayList<>();
         for (int i = 0; i < requested.size(); i++) {
-            swaps.add(jobSwaps.save(new JobSwap(job.getId(), targets.get(i), requested.get(i).faceId())));
+            swaps.add(jobSwaps.save(new JobSwap(job.getId(), targets.get(i), requested.get(i).faceId(),
+                    requested.get(i).sourceFaceIndex())));
         }
         jobLogs.save(new JobLog(job.getId(), "INFO", "Job queued with " + swaps.size() + " face assignment(s)"));
 
         boolean byPerson = targets.stream().anyMatch(Objects::nonNull);
         var message = new JobRequest(job.getId(), userId, video.getObjectKey(), resultKey(job), thumbnailKey(job),
                 job.isEnhance(), byPerson ? video.facesPrefix() + "faces.json" : null,
-                swaps.stream().map(s -> new SwapSpec(sourceFaces.get(s.getFaceId()).getObjectKey(), s.getTargetFaceIndex())).toList());
+                IntStream.range(0, swaps.size())
+                        .mapToObj(i -> new SwapSpec(sourceKeys.get(i), swaps.get(i).getTargetFaceIndex())).toList());
         // Publish only after commit, otherwise a fast worker could report on a job row that doesn't exist yet.
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
@@ -186,6 +196,36 @@ public class JobService {
         }
     }
 
+    /**
+     * Object key of the image the worker should take the source face from: the photo itself when it has
+     * one face, otherwise the crop of the face the user picked, so the worker can't pick the wrong person.
+     */
+    private String sourceKey(Face face, Integer index) {
+        switch (face.getAnalysisStatus()) {
+            case PENDING -> throw new ApiException(HttpStatus.CONFLICT,
+                    "Yüz fotoğrafları hâlâ analiz ediliyor, birkaç saniye sonra tekrar deneyin");
+            case FAILED -> {
+                // Not analyzed (older upload or analysis failure): the worker uses the largest face.
+                if (index != null) {
+                    throw ApiException.badRequest("Bu fotoğraf için yüz seçimi yapılamıyor");
+                }
+                return face.getObjectKey();
+            }
+            default -> {
+                List<FaceDetection> found = detections.findByFaceIdOrderByDetIndex(face.getId());
+                if (index == null) {
+                    if (found.size() > 1) {
+                        throw ApiException.badRequest("Fotoğrafta birden fazla kişi var, hangi yüzün kullanılacağını seçin");
+                    }
+                    return face.getObjectKey();
+                }
+                FaceDetection det = found.stream().filter(d -> d.getDetIndex() == index).findFirst()
+                        .orElseThrow(() -> ApiException.badRequest("Seçilen yüz bu fotoğrafta yok"));
+                return found.size() == 1 ? face.getObjectKey() : det.getCropKey();
+            }
+        }
+    }
+
     static String resultKey(Job job) {
         return "results/" + job.getUserId() + "/" + job.getId() + ".mp4";
     }
@@ -233,8 +273,11 @@ public class JobService {
             Face face = faceById.get(s.getFaceId());
             String targetUrl = video == null || s.getTargetFaceIndex() == null ? null
                     : mediaService.mediaUrl(uid, video.facesPrefix() + s.getTargetFaceIndex() + ".jpg");
-            return new SwapDto(s.getTargetFaceIndex(), s.getFaceId(),
-                    face == null ? null : mediaService.mediaUrl(uid, face.getObjectKey()), targetUrl);
+            String faceKey = face == null ? null
+                    : s.getSourceFaceIndex() == null ? face.getObjectKey()
+                    : face.cropsPrefix() + s.getSourceFaceIndex() + ".jpg";
+            return new SwapDto(s.getTargetFaceIndex(), s.getFaceId(), s.getSourceFaceIndex(),
+                    mediaService.mediaUrl(uid, faceKey), targetUrl);
         }).toList();
         return new JobDto(job.getId(), job.getStatus(), progress, job.isEnhance(), job.getErrorMessage(),
                 job.getVideoId(), video == null ? null : mediaService.mediaUrl(uid, video.getObjectKey()), swapDtos,

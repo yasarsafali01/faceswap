@@ -13,6 +13,9 @@ import org.springframework.context.annotation.Configuration;
 import static com.faceswap.job.JobMessages.ANALYSIS_RESULTS_QUEUE;
 import static com.faceswap.job.JobMessages.ANALYZED_ROUTING_KEY;
 import static com.faceswap.job.JobMessages.ANALYZE_DEAD_QUEUE;
+import static com.faceswap.job.JobMessages.ANALYZE_IMAGE_ROUTING_KEY;
+import static com.faceswap.job.JobMessages.IMAGE_ANALYSIS_RESULTS_QUEUE;
+import static com.faceswap.job.JobMessages.IMAGE_ANALYZED_ROUTING_KEY;
 import static com.faceswap.job.JobMessages.ANALYZE_QUEUE;
 import static com.faceswap.job.JobMessages.ANALYZE_ROUTING_KEY;
 import static com.faceswap.job.JobMessages.DEAD_LETTER_EXCHANGE;
@@ -102,6 +105,21 @@ public class RabbitConfig {
     @Bean
     Binding analysisResultsBinding() {
         return BindingBuilder.bind(analysisResultsQueue()).to(exchange()).with(ANALYZED_ROUTING_KEY);
+    }
+
+    @Bean
+    Binding analyzeImageBinding() {
+        return BindingBuilder.bind(analyzeQueue()).to(exchange()).with(ANALYZE_IMAGE_ROUTING_KEY);
+    }
+
+    @Bean
+    Queue imageAnalysisResultsQueue() {
+        return QueueBuilder.durable(IMAGE_ANALYSIS_RESULTS_QUEUE).build();
+    }
+
+    @Bean
+    Binding imageAnalysisResultsBinding() {
+        return BindingBuilder.bind(imageAnalysisResultsQueue()).to(exchange()).with(IMAGE_ANALYZED_ROUTING_KEY);
     }
 
     @Bean

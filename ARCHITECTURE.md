@@ -19,7 +19,7 @@ React Web (nginx gateway :8080)
                  Backend -> Postgres (durum) + Redis (ilerleme) + WebSocket (/user/queue/jobs)
 ```
 
-Kullanıcı akışı: video yükle -> worker birkaç saniyede videodaki kişileri bulur -> kullanıcı her kişiye ayrı bir yeni yüz atar (yüz atanmayan kişi değişmez) ya da "Hepsine aynı yüz" der -> izin -> başlat.
+Kullanıcı akışı: video yükle -> worker birkaç saniyede videodaki kişileri bulur. Paralelde bir veya birden fazla kaynak fotoğraf yüklenir (çoklu seçim); her fotoğraf da analiz edilir ve içindeki her yüz ayrı kırpılır (grup fotoğrafı = birden fazla seçenek). Kullanıcı videodaki her kişiye bu yüzlerden birini atar (her fotoğraf yüzü bir kez; yüz atanmayan kişi değişmez) ya da "Hepsine aynı yüz" der -> izin -> başlat.
 
 ## Bileşenler
 
@@ -27,9 +27,9 @@ Kullanıcı akışı: video yükle -> worker birkaç saniyede videodaki kişiler
 |---|---|---|
 | Gateway + Web | nginx + React (Vite, TS) | SPA, `/api` ve `/ws` reverse proxy, 250 MB upload limiti |
 | Backend | Spring Boot 3.5, Java 21 | Auth, yükleme, job oluşturma, event işleme, medya stream, WebSocket |
-| DB | PostgreSQL 16 + Flyway | `users, roles, user_roles, videos, faces, jobs, job_logs` (V1), `video_faces` + analiz/hedef kolonları (V2), `job_swaps` kişi -> yüz eşleşmeleri (V3; `jobs.face_id/target_face_index` ilk eşleşmeyi tutar) |
+| DB | PostgreSQL 16 + Flyway | `users, roles, user_roles, videos, faces, jobs, job_logs` (V1), `video_faces` + analiz/hedef kolonları (V2), `job_swaps` kişi -> yüz eşleşmeleri (V3; `jobs.face_id/target_face_index` ilk eşleşmeyi tutar), `face_detections` + fotoğraf analiz kolonları + `job_swaps.source_face_index` (V4) |
 | Cache | Redis 7 | refresh token allow-list, access token blacklist, rate limit, job ilerlemesi |
-| Storage | MinIO | `videos/`, `faces/`, `results/`, `thumbnails/` (key: `{tip}/{userId}/{uuid}.{ext}`), `video-faces/{userId}/{videoId}/` (`faces.json` + `{index}.jpg`) |
+| Storage | MinIO | `videos/`, `faces/`, `results/`, `thumbnails/` (key: `{tip}/{userId}/{uuid}.{ext}`), `video-faces/{userId}/{videoId}/` (`faces.json` + `{index}.jpg`), `face-crops/{userId}/{faceId}/{index}.jpg` |
 | Queue | RabbitMQ 4 | `faceswap` direct exchange; `faceswap.jobs` ve `faceswap.analyze` (DLX -> `*.dead`), `faceswap.job-events`, `faceswap.analysis-results` |
 | Worker | Python 3.12, ORT 1.30 (CUDA 13), InsightFace, FFmpeg | Tek job/worker, GPU'da inference |
 
@@ -46,7 +46,12 @@ Kaynak: `backend/.../job/JobMessages.java` ve `worker/app/messages.py`. Birini d
 // video.analyzed  (worker -> backend). Embedding'ler DB'ye değil facesPrefix + "faces.json"a yazılır.
 { "videoId": "uuid", "status": "READY|FAILED", "error": null, "faces": [{ "index": 0, "occurrences": 12 }] }
 
+// image.analyze  (backend -> worker, analyze kuyruğunu paylaşır) / image.analyzed (-> faceswap.image-analysis-results)
+{ "faceId": "uuid", "userId": 1, "imageKey": "faces/1/x.jpg", "cropsPrefix": "face-crops/1/<faceId>/" }
+{ "faceId": "uuid", "status": "READY|FAILED", "error": null, "faces": [0, 1, 2] }   // büyükten küçüğe
+
 // job.requested  (backend -> worker). Obje key'lerini backend belirler.
+// faceKey: tek yüzlü fotoğrafta fotoğrafın kendisi, grup fotoğrafında seçilen yüzün kırpımı.
 // Her swap: faceKey yüzü targetFaceIndex kişisine. Tek swap ve targetFaceIndex null ise tüm yüzler o yüzü alır.
 { "jobId": "uuid", "userId": 1, "videoKey": "videos/1/x.mp4",
   "resultKey": "results/1/<jobId>.mp4", "thumbnailKey": "thumbnails/1/<jobId>.jpg", "enhance": true,
@@ -72,6 +77,10 @@ Eşleşme kuralları (`JobService.resolveTargets`): analiz sürerken başlatma 4
 2. Embedding'ler cosine benzerliğiyle açgözlü kümelenir (`CLUSTER_THRESHOLD` 0.4, küme merkezine göre). 10+ örnek karede tek sefer görülen yüzler (arka plan, yanlış tespit) atılır; en sık görülen 12 kişi tutulur.
 3. Her kişi için en büyük/net yüz kırpılıp thumbnail olur; merkez embedding'ler `faces.json`a yazılır.
 
+### Fotoğraf analizi (kaynak yüzler)
+
+Fotoğraftaki yüzler bulunur (sıkı kırpılmışsa kenar boşluğuyla tekrar denenir), büyükten küçüğe sıralanır, det_score >= 0.6, en fazla 10. Her yüz için yüz boyutunun ~2.2 katı kare kırpım (render'da detector'ın yüzü tekrar bulabilmesi için bağlam; seçilen yüz kırpımdaki en büyük yüz olur), küçükse 512 px'e büyütülür. Birden fazla yüzlü fotoğrafta `sourceFaceIndex` zorunlu (400).
+
 ### Render
 
 1. Video + kaynak yüz MinIO'dan indirilir, `ffprobe` ile süre/fps/rotasyon okunur (limit: 180 sn, 1080p, 60 fps).
@@ -89,7 +98,7 @@ Eşleşme kuralları (`JobService.resolveTargets`): analiz sürerken başlatma 4
 
 Titreme ölçümü (sarsıntılı sentetik klip, optik akışla hareket telafili kareler arası hata, swap'ın orijinale eklediği fazlalık): eski kare-bağımsız pipeline 0.97 -> akış stabilizasyonu 0.65 -> + GFPGAN detay yumuşatması 0.54 (−%44). İyileştirme kapalıyken 0.15; kalan titremenin çoğu GFPGAN'ın her karede dokuyu yeniden üretmesinden geliyor.
 
-Ölçülen hız (RTX 5060, 6 yüzlü 1280x886 video): iyileştirme açık 2.7 fps, kapalı 11.3 fps; 6 kişiden 1'i seçilip iyileştirme ve takip açıkken 12.5 fps, 2 kişiye 2 farklı yüz 7.3 fps. Analiz 6 sn'lik videoda 2.2 sn. Yüz başına GPU süresi yaklaşık 16 ms (swap) ve 47 ms (GFPGAN), tek yüzlü videoda iyileştirmeyle yaklaşık 14 fps.
+Ölçülen hız (RTX 5060, 6 yüzlü 1280x886 video): iyileştirme açık 2.7 fps, kapalı 11.3 fps; 6 kişiden 1'i seçilip iyileştirme ve takip açıkken 12.5 fps, 2 kişiye 2 farklı yüz 7.3 fps, 3 kişiye 4.9 fps. Fotoğraf analizi ~1 sn. Analiz 6 sn'lik videoda 2.2 sn. Yüz başına GPU süresi yaklaşık 16 ms (swap) ve 47 ms (GFPGAN), tek yüzlü videoda iyileştirmeyle yaklaşık 14 fps.
 
 ## API
 
@@ -98,7 +107,8 @@ POST /api/auth/register | login | refresh | logout     GET /api/auth/me
 POST /api/videos/upload   GET /api/videos                (multipart "file")
 GET  /api/videos/{id}     analysisStatus (PENDING|READY|FAILED) + faces [{index, url, occurrences}]
 POST /api/faces/upload    GET /api/faces
-POST /api/jobs/start      {videoId, consent: true, enhance, swaps: [{faceId, targetFaceIndex}]}  (kısa yol: faceId + targetFaceIndex)
+GET  /api/faces/{id}      analysisStatus + detections [{index, url}] (fotoğraftaki yüzler)
+POST /api/jobs/start      {videoId, consent: true, enhance, swaps: [{faceId, sourceFaceIndex, targetFaceIndex}]}  (kısa yol: faceId + targetFaceIndex)
 GET  /api/jobs            GET /api/jobs/{id}             GET /api/jobs/{id}/result (Range destekli)
 GET  /api/media/{token}   imzalı medya linki (<video>/<img> için, Range destekli)
 WS   /ws (STOMP)          CONNECT header: Authorization: Bearer <token>; SUBSCRIBE /user/queue/jobs

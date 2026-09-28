@@ -13,9 +13,9 @@ from typing import Callable
 import pika
 
 from . import messages
-from .analysis import VideoAnalyzer
+from .analysis import PhotoAnalysisError, PhotoAnalyzer, VideoAnalyzer
 from .config import settings
-from .messages import AnalyzeRequest, JobRequest
+from .messages import AnalyzeImageRequest, AnalyzeRequest, JobRequest
 from .processor import JobError, Processor
 from .video import VideoError
 
@@ -25,9 +25,10 @@ Publish = Callable[[str, dict], None]
 
 
 class Consumer:
-    def __init__(self, processor: Processor, analyzer: VideoAnalyzer) -> None:
+    def __init__(self, processor: Processor, analyzer: VideoAnalyzer, photo_analyzer: PhotoAnalyzer) -> None:
         self.processor = processor
         self.analyzer = analyzer
+        self.photo_analyzer = photo_analyzer
         self.current_job: str | None = None
         self.processed = 0
         self.failed = 0
@@ -76,8 +77,11 @@ class Consumer:
             channel.queue_bind(dead, messages.DEAD_LETTER_EXCHANGE, dead)
         channel.queue_declare(messages.EVENTS_QUEUE, durable=True)
         channel.queue_declare(messages.ANALYSIS_RESULTS_QUEUE, durable=True)
+        channel.queue_declare(messages.IMAGE_ANALYSIS_RESULTS_QUEUE, durable=True)
         channel.queue_bind(messages.JOBS_QUEUE, messages.EXCHANGE, messages.JOB_ROUTING_KEY)
         channel.queue_bind(messages.ANALYZE_QUEUE, messages.EXCHANGE, messages.ANALYZE_ROUTING_KEY)
+        channel.queue_bind(messages.ANALYZE_QUEUE, messages.EXCHANGE, messages.ANALYZE_IMAGE_ROUTING_KEY)
+        channel.queue_bind(messages.IMAGE_ANALYSIS_RESULTS_QUEUE, messages.EXCHANGE, messages.IMAGE_ANALYZED_ROUTING_KEY)
         channel.queue_bind(messages.EVENTS_QUEUE, messages.EXCHANGE, messages.EVENT_ROUTING_KEY)
         channel.queue_bind(messages.ANALYSIS_RESULTS_QUEUE, messages.EXCHANGE, messages.ANALYZED_ROUTING_KEY)
 
@@ -139,6 +143,10 @@ class Consumer:
             self.current_job = None
 
     def _analyze(self, data: dict, publish: Publish) -> None:
+        # Videos and photos share the analyze queue; the payload tells them apart.
+        if "imageKey" in data:
+            self._analyze_photo(data, publish)
+            return
         req = AnalyzeRequest.from_json(data)
         try:
             faces = self.analyzer.run(req)
@@ -149,3 +157,14 @@ class Consumer:
             log.exception("Analysis of video %s crashed", req.video_id)
             result = messages.analysis_result(req.video_id, error="Video analiz edilemedi")
         publish(messages.ANALYZED_ROUTING_KEY, result)
+
+    def _analyze_photo(self, data: dict, publish: Publish) -> None:
+        req = AnalyzeImageRequest.from_json(data)
+        try:
+            result = messages.image_analysis_result(req.face_id, faces=self.photo_analyzer.run(req))
+        except PhotoAnalysisError as e:
+            result = messages.image_analysis_result(req.face_id, error=str(e))
+        except Exception:
+            log.exception("Analysis of photo %s crashed", req.face_id)
+            result = messages.image_analysis_result(req.face_id, error="Fotoğraf analiz edilemedi")
+        publish(messages.IMAGE_ANALYZED_ROUTING_KEY, result)

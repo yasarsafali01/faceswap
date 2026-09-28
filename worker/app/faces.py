@@ -125,18 +125,22 @@ class FaceEngine:
         self.providers = self.gfpgan.get_providers()
         log.info("Face engine ready, providers=%s, swapper=%s", self.providers, os.path.basename(swapper_path))
 
-    def source_face(self, image: np.ndarray) -> Face | None:
+    def photo_faces(self, image: np.ndarray) -> tuple[list[Face], np.ndarray]:
+        """All faces in a still photo, largest first, with the image they were detected on.
+
+        Tightly cropped portraits (face filling the whole image) are missed by the detector; padding
+        gives it the surrounding context it expects, so the padded image is returned in that case."""
         faces = self.analyzer.get(image)
         if not faces:
-            # Tightly cropped portraits (face filling the whole image) are missed by the detector;
-            # padding gives it the surrounding context it expects. Only the embedding is used later,
-            # so detecting on the padded copy is fine.
             pad = max(image.shape[:2]) // 2
-            padded = cv2.copyMakeBorder(image, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=(0, 0, 0))
-            faces = self.analyzer.get(padded)
-        if not faces:
-            return None
-        return max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
+            image = cv2.copyMakeBorder(image, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=(0, 0, 0))
+            faces = self.analyzer.get(image)
+        faces.sort(key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]), reverse=True)
+        return faces, image
+
+    def source_face(self, image: np.ndarray) -> Face | None:
+        faces, _ = self.photo_faces(image)
+        return faces[0] if faces else None
 
     def identity(self, source: Face) -> np.ndarray:
         """Projects the source face embedding into inswapper's latent space; computed once per job."""

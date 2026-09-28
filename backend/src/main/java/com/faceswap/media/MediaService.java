@@ -4,6 +4,7 @@ import com.faceswap.auth.JwtService;
 import com.faceswap.common.ApiException;
 import com.faceswap.config.AppProperties;
 import com.faceswap.job.JobMessages;
+import com.faceswap.job.JobMessages.AnalyzeImageRequest;
 import com.faceswap.job.JobMessages.AnalyzeRequest;
 import com.faceswap.storage.StorageService;
 import org.apache.tika.Tika;
@@ -34,15 +35,19 @@ public class MediaService {
 
     private static final Logger log = LoggerFactory.getLogger(MediaService.class);
 
-    public record MediaFileDto(UUID id, String originalName, String contentType, long sizeBytes,
-                               Instant createdAt, String url) {
-    }
-
     public record VideoFaceDto(int index, String url, int occurrences) {
     }
 
     public record VideoDto(UUID id, String originalName, String contentType, long sizeBytes, Instant createdAt,
                            String url, AnalysisStatus analysisStatus, String analysisError, List<VideoFaceDto> faces) {
+    }
+
+    public record DetectionDto(int index, String url) {
+    }
+
+    /** An uploaded source photo; detections lists every face in it (largest first) once analyzed. */
+    public record FaceDto(UUID id, String originalName, String contentType, long sizeBytes, Instant createdAt,
+                          String url, AnalysisStatus analysisStatus, String analysisError, List<DetectionDto> detections) {
     }
 
     // Detected type -> stored extension. Types are sniffed from magic bytes, never trusted from the client.
@@ -63,17 +68,19 @@ public class MediaService {
     private final VideoRepository videos;
     private final FaceRepository faces;
     private final VideoFaceRepository videoFaces;
+    private final FaceDetectionRepository detections;
     private final RabbitTemplate rabbit;
     private final AppProperties.Limits limits;
 
     public MediaService(StorageService storage, JwtService jwtService, VideoRepository videos,
-                        FaceRepository faces, VideoFaceRepository videoFaces, RabbitTemplate rabbit,
-                        AppProperties properties) {
+                        FaceRepository faces, VideoFaceRepository videoFaces, FaceDetectionRepository detections,
+                        RabbitTemplate rabbit, AppProperties properties) {
         this.storage = storage;
         this.jwtService = jwtService;
         this.videos = videos;
         this.faces = faces;
         this.videoFaces = videoFaces;
+        this.detections = detections;
         this.rabbit = rabbit;
         this.limits = properties.limits();
     }
@@ -125,13 +132,49 @@ public class MediaService {
     }
 
     @Transactional
-    public MediaFileDto uploadFace(long userId, MultipartFile file) {
+    public FaceDto uploadFace(long userId, MultipartFile file) {
         String type = validate(file, IMAGE_TYPES, limits.maxImageBytes(), "Desteklenmeyen görsel formatı (jpg, png, webp)");
         UUID id = UUID.randomUUID();
         String key = "faces/" + userId + "/" + id + "." + IMAGE_TYPES.get(type);
         store(key, file, type);
         Face face = faces.save(new Face(id, userId, key, safeName(file), type, file.getSize()));
-        return toDto(face);
+
+        var request = new AnalyzeImageRequest(id, userId, key, face.cropsPrefix());
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                requestImageAnalysis(request);
+            }
+        });
+        return toFaceDto(face, List.of());
+    }
+
+    @Transactional(readOnly = true)
+    public FaceDto getFace(long userId, UUID id) {
+        Face face = faces.findByIdAndUserId(id, userId).orElseThrow(() -> ApiException.notFound("Yüz"));
+        return toFaceDto(face, detections.findByFaceIdOrderByDetIndex(id));
+    }
+
+    public FaceDto toFaceDto(Face f, List<FaceDetection> found) {
+        long uid = f.getUserId();
+        List<DetectionDto> dets = found.stream()
+                .sorted(Comparator.comparingInt(FaceDetection::getDetIndex))
+                .map(d -> new DetectionDto(d.getDetIndex(), mediaUrl(uid, d.getCropKey())))
+                .toList();
+        return new FaceDto(f.getId(), f.getOriginalName(), f.getContentType(), f.getSizeBytes(), f.getCreatedAt(),
+                mediaUrl(uid, f.getObjectKey()), f.getAnalysisStatus(), f.getAnalysisError(), dets);
+    }
+
+    private void requestImageAnalysis(AnalyzeImageRequest request) {
+        try {
+            rabbit.convertAndSend(JobMessages.EXCHANGE, JobMessages.ANALYZE_IMAGE_ROUTING_KEY, request);
+        } catch (Exception e) {
+            log.error("Failed to request analysis for photo {}", request.faceId(), e);
+            faces.findById(request.faceId()).ifPresent(f -> {
+                f.markAnalysisFailed("Fotoğraf analizi başlatılamadı");
+                faces.save(f);
+            });
+        }
     }
 
     @Transactional(readOnly = true)
@@ -143,17 +186,15 @@ public class MediaService {
     }
 
     @Transactional(readOnly = true)
-    public List<MediaFileDto> listFaces(long userId) {
-        return faces.findByUserIdOrderByCreatedAtDesc(userId, PageRequest.of(0, 50)).stream().map(this::toDto).toList();
+    public List<FaceDto> listFaces(long userId) {
+        List<Face> page = faces.findByUserIdOrderByCreatedAtDesc(userId, PageRequest.of(0, 50));
+        Map<UUID, List<FaceDetection>> byFace = detections.findByFaceIdIn(page.stream().map(Face::getId).toList())
+                .stream().collect(Collectors.groupingBy(FaceDetection::getFaceId));
+        return page.stream().map(f -> toFaceDto(f, byFace.getOrDefault(f.getId(), List.of()))).toList();
     }
 
     public String mediaUrl(long userId, String objectKey) {
         return objectKey == null ? null : "/api/media/" + jwtService.mediaToken(userId, objectKey).token();
-    }
-
-    private MediaFileDto toDto(StoredFile f) {
-        return new MediaFileDto(f.getId(), f.getOriginalName(), f.getContentType(), f.getSizeBytes(),
-                f.getCreatedAt(), mediaUrl(f.getUserId(), f.getObjectKey()));
     }
 
     private String validate(MultipartFile file, Map<String, String> allowed, long maxBytes, String typeError) {

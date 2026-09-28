@@ -2,7 +2,7 @@ package com.faceswap.media;
 
 import com.faceswap.auth.AuthUser;
 import com.faceswap.auth.JwtService;
-import com.faceswap.media.MediaService.MediaFileDto;
+import com.faceswap.media.MediaService.FaceDto;
 import com.faceswap.media.MediaService.VideoDto;
 import com.faceswap.storage.MediaStreamer;
 import io.jsonwebtoken.Claims;
@@ -54,13 +54,19 @@ public class MediaController {
 
     @PostMapping(path = "/api/faces/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @ResponseStatus(HttpStatus.CREATED)
-    public MediaFileDto uploadFace(@AuthenticationPrincipal AuthUser user, @RequestParam("file") MultipartFile file) {
+    public FaceDto uploadFace(@AuthenticationPrincipal AuthUser user, @RequestParam("file") MultipartFile file) {
         return mediaService.uploadFace(user.id(), file);
     }
 
     @GetMapping("/api/faces")
-    public List<MediaFileDto> faces(@AuthenticationPrincipal AuthUser user) {
+    public List<FaceDto> faces(@AuthenticationPrincipal AuthUser user) {
         return mediaService.listFaces(user.id());
+    }
+
+    /** Polled after upload until analysisStatus leaves PENDING and the faces in the photo are known. */
+    @GetMapping("/api/faces/{id}")
+    public FaceDto face(@AuthenticationPrincipal AuthUser user, @PathVariable UUID id) {
+        return mediaService.getFace(user.id(), id);
     }
 
     @GetMapping("/api/media/{token}")

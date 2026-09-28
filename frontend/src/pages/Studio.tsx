@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
-import { api, type Job, type MediaFile, type Video } from '../api'
+import { api, faceOptions, upload, type FaceOption, type FacePhoto, type Job, type Video } from '../api'
 import { useAuth } from '../auth'
 import Dropzone from '../components/Dropzone'
+import FaceLibrary, { type PendingUpload } from '../components/FaceLibrary'
 import JobCard from '../components/JobCard'
 import PeopleAssigner, { type Assignments } from '../components/PeopleAssigner'
 import { useJobUpdates } from '../useJobUpdates'
@@ -9,9 +10,11 @@ import { useJobUpdates } from '../useJobUpdates'
 export default function Studio() {
   const { user, logout } = useAuth()
   const [video, setVideo] = useState<Video | null>(null)
+  const [photos, setPhotos] = useState<FacePhoto[]>([])
+  const [uploads, setUploads] = useState<PendingUpload[]>([])
   const [assignments, setAssignments] = useState<Assignments>({})
   // One face for every person in the video (also the only option when analysis failed).
-  const [allFace, setAllFace] = useState<MediaFile | null>(null)
+  const [allFace, setAllFace] = useState<FaceOption | null>(null)
   const [consent, setConsent] = useState(false)
   const [enhance, setEnhance] = useState(true)
   const [jobs, setJobs] = useState<Job[]>([])
@@ -54,24 +57,73 @@ export default function Studio() {
     return () => clearInterval(t)
   }, [videoId, analyzing])
 
+  // Photos are analyzed in the background like videos; poll the ones still pending.
+  const pendingPhotoIds = photos.filter((p) => p.analysisStatus === 'PENDING').map((p) => p.id).join(',')
+  useEffect(() => {
+    if (!pendingPhotoIds) return
+    const t = setInterval(async () => {
+      for (const id of pendingPhotoIds.split(',')) {
+        try {
+          const updated = await api<FacePhoto>(`/api/faces/${id}`)
+          if (updated.analysisStatus !== 'PENDING') {
+            setPhotos((list) => list.map((p) => (p.id === id ? updated : p)))
+          }
+        } catch {
+          // Transient errors: keep polling.
+        }
+      }
+    }, 1200)
+    return () => clearInterval(t)
+  }, [pendingPhotoIds])
+
+  function uploadPhotos(files: File[]) {
+    const images = files.filter((f) => f.type.startsWith('image/'))
+    if (images.length === 0) return
+    const offset = uploads.length
+    setUploads((list) => [...list, ...images.map((f) => ({ name: f.name, progress: 0, error: null }))])
+    const update = (i: number, patch: Partial<PendingUpload>) =>
+      setUploads((list) => list.map((u, j) => (j === offset + i ? { ...u, ...patch } : u)))
+    images.forEach(async (file, i) => {
+      try {
+        const photo = await upload<FacePhoto>('/api/faces/upload', file, (progress) => update(i, { progress }))
+        setPhotos((list) => [...list, photo])
+        // Finished uploads leave the list; failed ones stay so the error is visible.
+        setUploads((list) => list.map((u, j) => (j === offset + i ? { ...u, progress: 100, name: '' } : u)))
+      } catch (err) {
+        update(i, { error: err instanceof Error ? err.message : 'Yükleme başarısız' })
+      }
+    })
+  }
+
+  function removePhoto(id: string) {
+    setPhotos((list) => list.filter((p) => p.id !== id))
+    setAssignments((current) => Object.fromEntries(Object.entries(current).filter(([, o]) => o.faceId !== id)))
+    setAllFace((current) => (current?.faceId === id ? null : current))
+  }
+
   function changeVideo(v: Video | null) {
     setVideo(v)
     setAssignments({})
     setAllFace(null)
   }
 
-  function assign(index: number, face: MediaFile | null) {
+  function assign(index: number, option: FaceOption | null) {
     setAssignments((current) => {
       const next = { ...current }
-      if (face) next[index] = face
+      if (option) next[index] = option
       else delete next[index]
       return next
     })
   }
 
+  const options = faceOptions(photos)
   const swaps = allFace
-    ? [{ faceId: allFace.id, targetFaceIndex: null }]
-    : Object.entries(assignments).map(([index, face]) => ({ faceId: face.id, targetFaceIndex: Number(index) }))
+    ? [{ faceId: allFace.faceId, sourceFaceIndex: allFace.sourceFaceIndex, targetFaceIndex: null }]
+    : Object.entries(assignments).map(([index, o]) => ({
+        faceId: o.faceId,
+        sourceFaceIndex: o.sourceFaceIndex,
+        targetFaceIndex: Number(index),
+      }))
   const analyzed = video?.analysisStatus === 'FAILED' || (video?.analysisStatus === 'READY' && video.faces.length > 0)
   const canStart = !!video && analyzed && swaps.length > 0 && consent && !starting
 
@@ -125,9 +177,17 @@ export default function Studio() {
             onChange={changeVideo}
           />
 
+          <FaceLibrary
+            photos={photos}
+            uploads={uploads.filter((u) => u.name)}
+            onFiles={uploadPhotos}
+            onRemove={removePhoto}
+          />
+
           {video && (
             <PeopleAssigner
               video={video}
+              options={options}
               assignments={assignments}
               onAssign={assign}
               allFace={allFace}

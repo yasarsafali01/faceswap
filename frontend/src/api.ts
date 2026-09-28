@@ -17,10 +17,38 @@ export type Video = MediaFile & {
   faces: VideoFace[]
 }
 
+export type Detection = { index: number; url: string }
+
+/** An uploaded source photo; detections are the faces in it, largest first, once analyzed. */
+export type FacePhoto = MediaFile & {
+  analysisStatus: 'PENDING' | 'READY' | 'FAILED'
+  analysisError: string | null
+  detections: Detection[]
+}
+
+/** One pickable face: a photo, and which face in it when the photo shows several people. */
+export type FaceOption = { key: string; faceId: string; sourceFaceIndex: number | null; url: string }
+
+export function faceOptions(photos: FacePhoto[]): FaceOption[] {
+  return photos.flatMap((p): FaceOption[] => {
+    if (p.analysisStatus !== 'READY') return []
+    if (p.detections.length === 1) {
+      return [{ key: `${p.id}:-`, faceId: p.id, sourceFaceIndex: null, url: p.detections[0].url }]
+    }
+    return p.detections.map((d) => ({ key: `${p.id}:${d.index}`, faceId: p.id, sourceFaceIndex: d.index, url: d.url }))
+  })
+}
+
 export type JobStatus = 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'FAILED'
 
 /** One "person in the video -> new face" assignment; targetFaceIndex null means everyone. */
-export type Swap = { targetFaceIndex: number | null; faceId: string; faceUrl: string | null; targetFaceUrl: string | null }
+export type Swap = {
+  targetFaceIndex: number | null
+  faceId: string
+  sourceFaceIndex: number | null
+  faceUrl: string | null
+  targetFaceUrl: string | null
+}
 
 export type Job = {
   id: string

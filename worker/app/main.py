@@ -15,7 +15,7 @@ state: dict = {"status": "loading", "consumer": None, "providers": [], "error": 
 def _boot() -> None:
     # Imported lazily so the health endpoint is up while models download on first start.
     try:
-        from .analysis import VideoAnalyzer
+        from .analysis import PhotoAnalyzer, VideoAnalyzer
         from .consumer import Consumer
         from .faces import FaceEngine
         from .processor import Processor
@@ -24,7 +24,7 @@ def _boot() -> None:
         engine = FaceEngine()
         state["providers"] = engine.providers
         storage = Storage()
-        consumer = Consumer(Processor(engine, storage), VideoAnalyzer(engine, storage))
+        consumer = Consumer(Processor(engine, storage), VideoAnalyzer(engine, storage), PhotoAnalyzer(engine, storage))
         state["consumer"] = consumer
         state["status"] = "ready"
         consumer.run_forever()

@@ -14,8 +14,11 @@ public final class JobDtos {
     private JobDtos() {
     }
 
-    /** targetFaceIndex: which person from the video's analysis gets faceId; null means everyone. */
-    public record SwapRequest(@NotNull UUID faceId, @Min(0) Integer targetFaceIndex) {
+    /**
+     * targetFaceIndex: which person from the video's analysis gets the new face; null means everyone.
+     * sourceFaceIndex: which face of the photo faceId to use; required when the photo shows several people.
+     */
+    public record SwapRequest(@NotNull UUID faceId, @Min(0) Integer targetFaceIndex, @Min(0) Integer sourceFaceIndex) {
     }
 
     /**
@@ -30,11 +33,12 @@ public final class JobDtos {
             if (swaps != null && !swaps.isEmpty()) {
                 return swaps;
             }
-            return faceId == null ? List.of() : List.of(new SwapRequest(faceId, targetFaceIndex));
+            return faceId == null ? List.of() : List.of(new SwapRequest(faceId, targetFaceIndex, null));
         }
     }
 
-    public record SwapDto(Integer targetFaceIndex, UUID faceId, String faceUrl, String targetFaceUrl) {
+    public record SwapDto(Integer targetFaceIndex, UUID faceId, Integer sourceFaceIndex, String faceUrl,
+                          String targetFaceUrl) {
     }
 
     public record JobDto(UUID id, JobStatus status, int progress, boolean enhance, String error,

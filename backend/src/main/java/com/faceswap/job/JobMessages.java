@@ -22,6 +22,10 @@ public final class JobMessages {
     public static final String ANALYSIS_RESULTS_QUEUE = "faceswap.analysis-results";
     public static final String ANALYZE_ROUTING_KEY = "video.analyze";
     public static final String ANALYZED_ROUTING_KEY = "video.analyzed";
+    // Photo analysis shares the analyze queue (both are short) but reports on its own queue.
+    public static final String ANALYZE_IMAGE_ROUTING_KEY = "image.analyze";
+    public static final String IMAGE_ANALYZED_ROUTING_KEY = "image.analyzed";
+    public static final String IMAGE_ANALYSIS_RESULTS_QUEUE = "faceswap.image-analysis-results";
 
     /**
      * Backend -> worker. Object keys are decided here so workers never invent storage paths.
@@ -44,6 +48,14 @@ public final class JobMessages {
     }
 
     public record DetectedFace(int index, int occurrences) {
+    }
+
+    /** Backend -> worker: find and crop every face in an uploaded source photo. */
+    public record AnalyzeImageRequest(UUID faceId, long userId, String imageKey, String cropsPrefix) {
+    }
+
+    /** Worker -> backend. Crops live at cropsPrefix + index + ".jpg", largest face first. */
+    public record ImageAnalysisResult(UUID faceId, String status, String error, List<Integer> faces) {
     }
 
     public enum EventType {STARTED, PROGRESS, COMPLETED, FAILED}

@@ -27,13 +27,21 @@ public class JobSwap {
     @Column(name = "face_id", nullable = false)
     private UUID faceId;
 
+    @Column(name = "source_face_index")
+    private Integer sourceFaceIndex;
+
     protected JobSwap() {
     }
 
-    public JobSwap(UUID jobId, Integer targetFaceIndex, UUID faceId) {
+    public JobSwap(UUID jobId, Integer targetFaceIndex, UUID faceId, Integer sourceFaceIndex) {
         this.jobId = jobId;
         this.targetFaceIndex = targetFaceIndex;
         this.faceId = faceId;
+        this.sourceFaceIndex = sourceFaceIndex;
+    }
+
+    public Integer getSourceFaceIndex() {
+        return sourceFaceIndex;
     }
 
     public UUID getJobId() {
