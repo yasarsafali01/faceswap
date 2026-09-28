@@ -25,11 +25,14 @@ public final class JobMessages {
 
     /**
      * Backend -> worker. Object keys are decided here so workers never invent storage paths.
-     * facesKey/targetFaceIndex are null when every face in the video should be swapped.
+     * Each swap puts faceKey onto the person targetFaceIndex from the video analysis (facesKey holds
+     * their embeddings). A single swap with targetFaceIndex null means every face gets that face.
      */
-    public record JobRequest(UUID jobId, long userId, String videoKey, String faceKey,
-                             String resultKey, String thumbnailKey, boolean enhance,
-                             String facesKey, Integer targetFaceIndex) {
+    public record JobRequest(UUID jobId, long userId, String videoKey, String resultKey, String thumbnailKey,
+                             boolean enhance, String facesKey, List<SwapSpec> swaps) {
+    }
+
+    public record SwapSpec(String faceKey, Integer targetFaceIndex) {
     }
 
     /** Backend -> worker: find the distinct people in a freshly uploaded video. */

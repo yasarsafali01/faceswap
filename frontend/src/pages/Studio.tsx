@@ -2,15 +2,16 @@ import { useCallback, useEffect, useState } from 'react'
 import { api, type Job, type MediaFile, type Video } from '../api'
 import { useAuth } from '../auth'
 import Dropzone from '../components/Dropzone'
-import FacePicker, { type Target } from '../components/FacePicker'
 import JobCard from '../components/JobCard'
+import PeopleAssigner, { type Assignments } from '../components/PeopleAssigner'
 import { useJobUpdates } from '../useJobUpdates'
 
 export default function Studio() {
   const { user, logout } = useAuth()
   const [video, setVideo] = useState<Video | null>(null)
-  const [target, setTarget] = useState<Target>(null)
-  const [face, setFace] = useState<MediaFile | null>(null)
+  const [assignments, setAssignments] = useState<Assignments>({})
+  // One face for every person in the video (also the only option when analysis failed).
+  const [allFace, setAllFace] = useState<MediaFile | null>(null)
   const [consent, setConsent] = useState(false)
   const [enhance, setEnhance] = useState(true)
   const [jobs, setJobs] = useState<Job[]>([])
@@ -46,7 +47,6 @@ export default function Studio() {
         const updated = await api<Video>(`/api/videos/${videoId}`)
         if (updated.analysisStatus === 'PENDING') return
         setVideo(updated)
-        setTarget(updated.faces.length === 1 ? updated.faces[0].index : null)
       } catch {
         // Transient errors: keep polling.
       }
@@ -56,13 +56,24 @@ export default function Studio() {
 
   function changeVideo(v: Video | null) {
     setVideo(v)
-    setTarget(null)
+    setAssignments({})
+    setAllFace(null)
   }
 
-  const targetReady =
-    video?.analysisStatus === 'FAILED' ||
-    (video?.analysisStatus === 'READY' && video.faces.length > 0 && target !== null)
-  const canStart = !!video && !!face && consent && targetReady && !starting
+  function assign(index: number, face: MediaFile | null) {
+    setAssignments((current) => {
+      const next = { ...current }
+      if (face) next[index] = face
+      else delete next[index]
+      return next
+    })
+  }
+
+  const swaps = allFace
+    ? [{ faceId: allFace.id, targetFaceIndex: null }]
+    : Object.entries(assignments).map(([index, face]) => ({ faceId: face.id, targetFaceIndex: Number(index) }))
+  const analyzed = video?.analysisStatus === 'FAILED' || (video?.analysisStatus === 'READY' && video.faces.length > 0)
+  const canStart = !!video && analyzed && swaps.length > 0 && consent && !starting
 
   // Fall back to polling only while the socket is down and something is still running.
   const hasActive = jobs.some((j) => j.status === 'QUEUED' || j.status === 'PROCESSING')
@@ -73,19 +84,13 @@ export default function Studio() {
   }, [connected, hasActive, loadJobs])
 
   async function start() {
-    if (!video || !face) return
+    if (!video || swaps.length === 0) return
     setError(null)
     setStarting(true)
     try {
       const job = await api<Job>('/api/jobs/start', {
         method: 'POST',
-        body: JSON.stringify({
-          videoId: video.id,
-          faceId: face.id,
-          consent,
-          enhance,
-          targetFaceIndex: typeof target === 'number' ? target : null,
-        }),
+        body: JSON.stringify({ videoId: video.id, swaps, consent, enhance }),
       })
       setJobs((list) => [job, ...list.filter((j) => j.id !== job.id)])
       setConsent(false)
@@ -111,26 +116,24 @@ export default function Studio() {
 
       <main className="studio">
         <section className="panel">
-          <div className="steps">
-            <Dropzone
-              kind="video"
-              title="1. Video"
-              hint="MP4, MOV, WEBM · en fazla 200 MB · 3 dakika"
-              accept="video/mp4,video/quicktime,video/webm,video/x-matroska"
-              value={video}
-              onChange={changeVideo}
-            />
-            <Dropzone
-              kind="face"
-              title="2. Kaynak yüz"
-              hint="Yüzün net ve önden göründüğü JPG, PNG, WEBP"
-              accept="image/jpeg,image/png,image/webp"
-              value={face}
-              onChange={setFace}
-            />
-          </div>
+          <Dropzone
+            kind="video"
+            title="1. Video"
+            hint="MP4, MOV, WEBM · en fazla 200 MB · 3 dakika"
+            accept="video/mp4,video/quicktime,video/webm,video/x-matroska"
+            value={video}
+            onChange={changeVideo}
+          />
 
-          {video && <FacePicker video={video} value={target} onChange={setTarget} />}
+          {video && (
+            <PeopleAssigner
+              video={video}
+              assignments={assignments}
+              onAssign={assign}
+              allFace={allFace}
+              onAllFace={setAllFace}
+            />
+          )}
 
           <div className="options">
             <label className="check">
@@ -158,7 +161,7 @@ export default function Studio() {
         <section className="panel">
           <h2>İşlemler</h2>
           {jobs.length === 0 ? (
-            <p className="muted">Henüz bir işlem yok. Video ve yüz yükleyip başlatın.</p>
+            <p className="muted">Henüz bir işlem yok. Video yükleyip kişilere yeni yüz ekleyin.</p>
           ) : (
             <div className="jobs">
               {jobs.map((job) => <JobCard key={job.id} job={job} onOpen={setPlaying} />)}

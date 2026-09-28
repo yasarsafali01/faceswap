@@ -19,7 +19,7 @@ React Web (nginx gateway :8080)
                  Backend -> Postgres (durum) + Redis (ilerleme) + WebSocket (/user/queue/jobs)
 ```
 
-Kullanıcı akışı: video yükle -> worker birkaç saniyede videodaki kişileri bulur -> kullanıcı değiştirilecek kişiyi (veya "Hepsi") seçer -> kaynak yüz + izin -> başlat.
+Kullanıcı akışı: video yükle -> worker birkaç saniyede videodaki kişileri bulur -> kullanıcı her kişiye ayrı bir yeni yüz atar (yüz atanmayan kişi değişmez) ya da "Hepsine aynı yüz" der -> izin -> başlat.
 
 ## Bileşenler
 
@@ -27,7 +27,7 @@ Kullanıcı akışı: video yükle -> worker birkaç saniyede videodaki kişiler
 |---|---|---|
 | Gateway + Web | nginx + React (Vite, TS) | SPA, `/api` ve `/ws` reverse proxy, 250 MB upload limiti |
 | Backend | Spring Boot 3.5, Java 21 | Auth, yükleme, job oluşturma, event işleme, medya stream, WebSocket |
-| DB | PostgreSQL 16 + Flyway | `users, roles, user_roles, videos, faces, jobs, job_logs` (V1), `video_faces` + analiz/hedef kolonları (V2) |
+| DB | PostgreSQL 16 + Flyway | `users, roles, user_roles, videos, faces, jobs, job_logs` (V1), `video_faces` + analiz/hedef kolonları (V2), `job_swaps` kişi -> yüz eşleşmeleri (V3; `jobs.face_id/target_face_index` ilk eşleşmeyi tutar) |
 | Cache | Redis 7 | refresh token allow-list, access token blacklist, rate limit, job ilerlemesi |
 | Storage | MinIO | `videos/`, `faces/`, `results/`, `thumbnails/` (key: `{tip}/{userId}/{uuid}.{ext}`), `video-faces/{userId}/{videoId}/` (`faces.json` + `{index}.jpg`) |
 | Queue | RabbitMQ 4 | `faceswap` direct exchange; `faceswap.jobs` ve `faceswap.analyze` (DLX -> `*.dead`), `faceswap.job-events`, `faceswap.analysis-results` |
@@ -47,16 +47,17 @@ Kaynak: `backend/.../job/JobMessages.java` ve `worker/app/messages.py`. Birini d
 { "videoId": "uuid", "status": "READY|FAILED", "error": null, "faces": [{ "index": 0, "occurrences": 12 }] }
 
 // job.requested  (backend -> worker). Obje key'lerini backend belirler.
-// facesKey/targetFaceIndex null ise videodaki tüm yüzler değiştirilir.
-{ "jobId": "uuid", "userId": 1, "videoKey": "videos/1/x.mp4", "faceKey": "faces/1/y.png",
+// Her swap: faceKey yüzü targetFaceIndex kişisine. Tek swap ve targetFaceIndex null ise tüm yüzler o yüzü alır.
+{ "jobId": "uuid", "userId": 1, "videoKey": "videos/1/x.mp4",
   "resultKey": "results/1/<jobId>.mp4", "thumbnailKey": "thumbnails/1/<jobId>.jpg", "enhance": true,
-  "facesKey": "video-faces/1/<videoId>/faces.json", "targetFaceIndex": 2 }
+  "facesKey": "video-faces/1/<videoId>/faces.json",
+  "swaps": [{ "faceKey": "faces/1/a.png", "targetFaceIndex": 0 }, { "faceKey": "faces/1/b.jpg", "targetFaceIndex": 3 }] }
 
 // job.event  (worker -> backend)
 { "jobId": "uuid", "type": "STARTED|PROGRESS|COMPLETED|FAILED", "progress": 42, "error": null, "workerId": "worker-1" }
 ```
 
-Hedef kişi kuralları (`JobService.resolveTarget`): analiz sürerken başlatma 409; analiz başarısızsa tüm yüzler; tek kişi varsa otomatik o kişi; birden fazla kişide `targetFaceIndex` veya `null` (= hepsi).
+Eşleşme kuralları (`JobService.resolveTargets`): analiz sürerken başlatma 409; analiz başarısızsa sadece tek yüz + herkes; tek swap ve hedef yoksa (tek kişilik videoda o kişi, değilse herkes); birden fazla swap'ta her birinin hedefi olmalı, hedefler analizde bulunmalı ve tekrar etmemeli; en fazla 12 swap.
 
 - Mesaj DB commit'inden **sonra** yayınlanır (worker'ın olmayan satırı raporlamasını önler).
 - Worker job bitene kadar ack atmaz; worker çökerse mesaj tekrar dağıtılır. Backend terminal durumdaki job'a gelen event'leri yok sayar.
@@ -74,12 +75,12 @@ Hedef kişi kuralları (`JobService.resolveTarget`): analiz sürerken başlatma 
 ### Render
 
 1. Video + kaynak yüz MinIO'dan indirilir, `ffprobe` ile süre/fps/rotasyon okunur (limit: 180 sn, 1080p, 60 fps).
-2. Kaynak yüz: InsightFace `buffalo_l` (detection + ArcFace embedding + yaş). Sıkı kırpılmış fotoğrafta kenar boşluğu eklenip tekrar denenir. Embedding inswapper latent'ine bir kez projekte edilir. Hedef kişi seçildiyse `faces.json`dan o kişinin merkez embedding'i yüklenir.
+2. Her swap'ın kaynak yüzü: InsightFace `buffalo_l` (detection + ArcFace embedding + yaş). Sıkı kırpılmış fotoğrafta kenar boşluğu eklenip tekrar denenir. Embedding inswapper latent'ine bir kez projekte edilir. Hedef kişiler varsa `faces.json`dan merkez embedding'leri (K x 512) yüklenir.
 3. FFmpeg kareleri pipe ile raw BGR olarak verir (diske frame yazılmaz, reader ayrı thread'de).
 4. **Sıralı aşama (ana thread, kare sırasıyla):** SCRFD detection -> yüz takibi (`worker/app/tracking.py`):
    - Yüzler IoU ile kareler arası eşlenir; eşleşmeyen yüz yeni track (sahne kesmesinde durum taşınmaz).
    - Landmark'lar **optik akışla stabilize** edilir: yüz bölgesinin kareler arası hareketi (LK flow + benzerlik dönüşümü) ölçülür, önceki tahmin bu hareketle taşınıp yeni tespitle %70/%30 harmanlanır. Düz alçak geçiren filtre (One Euro) sarsıntılı kamerada geride kaldığı için denendi ve reddedildi.
-   - Hedef kişi seçildiyse kimlik histerezisi: track `MATCH_THRESHOLD` (0.3) ile hedef olur, `KEEP_THRESHOLD` (0.15) altına düşene kadar hedef kalır; ArcFace 5 karede bir yeniden çalışır.
+   - Hedef kişiler varsa her track en benzer hedefe atanır; kimlik histerezisi: `MATCH_THRESHOLD` (0.3) ile atanır, `KEEP_THRESHOLD` (0.15) altına düşene kadar ataması korunur; aynı hedefe iki track düşerse en benzeri seçilir; ArcFace 5 karede bir yeniden çalışır. Her yüz kendi hedefinin kaynak yüzüyle swap edilir.
    - 1–3 karelik tespit kayıpları yüz hareketle taşınarak doldurulur (orijinal yüz "yanıp sönmez").
 5. **Paralel aşama (3 thread):** ArcFace hizalama -> **inswapper_128 fp16** -> bölgesel yumuşak maske ile paste-back -> opsiyonel **GFPGAN 1.4** inference (FFHQ hizalama).
 6. **Sıralı yazma:** GFPGAN'ın eklediği detay katmanı track başına önceki kareyle harmanlanır (`ENHANCER_TEMPORAL` 0.5), %80 blend ile yapıştırılır. Görünür filigran varsayılan kapalı (`WATERMARK_TEXT`).
@@ -88,7 +89,7 @@ Hedef kişi kuralları (`JobService.resolveTarget`): analiz sürerken başlatma 
 
 Titreme ölçümü (sarsıntılı sentetik klip, optik akışla hareket telafili kareler arası hata, swap'ın orijinale eklediği fazlalık): eski kare-bağımsız pipeline 0.97 -> akış stabilizasyonu 0.65 -> + GFPGAN detay yumuşatması 0.54 (−%44). İyileştirme kapalıyken 0.15; kalan titremenin çoğu GFPGAN'ın her karede dokuyu yeniden üretmesinden geliyor.
 
-Ölçülen hız (RTX 5060, 6 yüzlü 1280x886 video): iyileştirme açık 2.7 fps, kapalı 11.3 fps; 6 kişiden 1'i seçilip iyileştirme ve takip açıkken 12.5 fps. Analiz 6 sn'lik videoda 2.2 sn. Yüz başına GPU süresi yaklaşık 16 ms (swap) ve 47 ms (GFPGAN), tek yüzlü videoda iyileştirmeyle yaklaşık 14 fps.
+Ölçülen hız (RTX 5060, 6 yüzlü 1280x886 video): iyileştirme açık 2.7 fps, kapalı 11.3 fps; 6 kişiden 1'i seçilip iyileştirme ve takip açıkken 12.5 fps, 2 kişiye 2 farklı yüz 7.3 fps. Analiz 6 sn'lik videoda 2.2 sn. Yüz başına GPU süresi yaklaşık 16 ms (swap) ve 47 ms (GFPGAN), tek yüzlü videoda iyileştirmeyle yaklaşık 14 fps.
 
 ## API
 
@@ -97,7 +98,7 @@ POST /api/auth/register | login | refresh | logout     GET /api/auth/me
 POST /api/videos/upload   GET /api/videos                (multipart "file")
 GET  /api/videos/{id}     analysisStatus (PENDING|READY|FAILED) + faces [{index, url, occurrences}]
 POST /api/faces/upload    GET /api/faces
-POST /api/jobs/start      {videoId, faceId, consent: true, enhance, targetFaceIndex}
+POST /api/jobs/start      {videoId, consent: true, enhance, swaps: [{faceId, targetFaceIndex}]}  (kısa yol: faceId + targetFaceIndex)
 GET  /api/jobs            GET /api/jobs/{id}             GET /api/jobs/{id}/result (Range destekli)
 GET  /api/media/{token}   imzalı medya linki (<video>/<img> için, Range destekli)
 WS   /ws (STOMP)          CONNECT header: Authorization: Bearer <token>; SUBSCRIBE /user/queue/jobs

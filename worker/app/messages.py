@@ -17,30 +17,38 @@ ANALYZED_ROUTING_KEY = "video.analyzed"
 
 
 @dataclass(frozen=True)
+class SwapSpec:
+    face_key: str
+    # Person index from the video analysis; None means every face in the video gets this face.
+    target_face_index: int | None
+
+
+@dataclass(frozen=True)
 class JobRequest:
     job_id: str
     user_id: int
     video_key: str
-    face_key: str
     result_key: str
     thumbnail_key: str
     enhance: bool
-    # Both None means every face in the video is swapped.
+    # Analysis embeddings (faces.json); None when the single swap applies to everyone.
     faces_key: str | None
-    target_face_index: int | None
+    swaps: list[SwapSpec]
 
     @staticmethod
     def from_json(data: dict) -> "JobRequest":
+        swaps = [SwapSpec(face_key=s["faceKey"], target_face_index=s.get("targetFaceIndex")) for s in data["swaps"]]
+        if not swaps:
+            raise ValueError("job without swaps")
         return JobRequest(
             job_id=str(data["jobId"]),
             user_id=int(data["userId"]),
             video_key=data["videoKey"],
-            face_key=data["faceKey"],
             result_key=data["resultKey"],
             thumbnail_key=data["thumbnailKey"],
             enhance=bool(data.get("enhance", True)),
             faces_key=data.get("facesKey"),
-            target_face_index=data.get("targetFaceIndex"),
+            swaps=swaps,
         )
 
 

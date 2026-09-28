@@ -19,6 +19,9 @@ export type Video = MediaFile & {
 
 export type JobStatus = 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'FAILED'
 
+/** One "person in the video -> new face" assignment; targetFaceIndex null means everyone. */
+export type Swap = { targetFaceIndex: number | null; faceId: string; faceUrl: string | null; targetFaceUrl: string | null }
+
 export type Job = {
   id: string
   status: JobStatus
@@ -26,11 +29,8 @@ export type Job = {
   enhance: boolean
   error: string | null
   videoId: string
-  faceId: string
   videoUrl: string | null
-  faceUrl: string | null
-  targetFaceIndex: number | null
-  targetFaceUrl: string | null
+  swaps: Swap[]
   resultUrl: string | null
   thumbnailUrl: string | null
   createdAt: string

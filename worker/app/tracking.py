@@ -87,21 +87,24 @@ class Track:
     bbox: np.ndarray
     stabilizer: FlowStabilizer
     last_seen: int
-    similarity: float | None = None
-    is_target: bool = False
+    # Smoothed similarity to each chosen person (row of FaceTracker.targets).
+    similarities: np.ndarray | None = None
+    # Index of the chosen person this face is, or None.
+    assigned: int | None = None
     last_embedded: int = -REIDENTIFY_EVERY
 
 
 class FaceTracker:
-    """Decides, frame by frame and in order, which landmarks to swap.
+    """Decides, frame by frame and in order, which landmarks to swap and with which source face.
 
-    target=None swaps every face. Otherwise a track becomes the target once its identity similarity
-    reaches match_threshold and stays the target until it drops below keep_threshold, so a turned or
-    blurred head doesn't flip back to the original face."""
+    targets=None swaps every face (face.target = 0). Otherwise targets is (K, 512): a track is assigned
+    to its most similar chosen person once the similarity reaches match_threshold, and keeps that
+    assignment until it drops below keep_threshold, so a turned or blurred head doesn't flip back to the
+    original face or jump to another person's source face."""
 
-    def __init__(self, target: np.ndarray | None, match_threshold: float, keep_threshold: float,
+    def __init__(self, targets: np.ndarray | None, match_threshold: float, keep_threshold: float,
                  flow_weight: float = 0.7) -> None:
-        self.target = target
+        self.targets = targets
         self.match_threshold = match_threshold
         self.keep_threshold = keep_threshold
         self.flow_weight = flow_weight
@@ -114,7 +117,7 @@ class FaceTracker:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         # Motion is only needed for faces that get swapped; others are just associated by overlap.
         motions = [_face_motion(self.prev_gray, gray, t.bbox)
-                   if self.prev_gray is not None and (self.target is None or t.is_target) else None
+                   if self.prev_gray is not None and (self.targets is None or t.assigned is not None) else None
                    for t in self.tracks]
         claimed: set[int] = set()
 
@@ -140,13 +143,14 @@ class FaceTracker:
                 track.stabilizer.update(motions[best], face.kps)
                 track.bbox, track.last_seen = face.bbox, index
                 claimed.add(best)
-            if self.target is not None and index - track.last_embedded >= REIDENTIFY_EVERY:
+            if self.targets is not None and index - track.last_embedded >= REIDENTIFY_EVERY:
                 track.last_embedded = index
-                sim = float(embed(face) @ self.target)
+                sims = self.targets @ embed(face)
                 # Smoothed similarity: one bad frame shouldn't decide identity.
-                track.similarity = sim if track.similarity is None else 0.6 * track.similarity + 0.4 * sim
-                threshold = self.keep_threshold if track.is_target else self.match_threshold
-                track.is_target = track.similarity >= threshold
+                track.similarities = sims if track.similarities is None else 0.6 * track.similarities + 0.4 * sims
+                k = int(np.argmax(track.similarities))
+                threshold = self.keep_threshold if k == track.assigned else self.match_threshold
+                track.assigned = k if track.similarities[k] >= threshold else None
 
         for i, track in enumerate(self.tracks):
             if i not in claimed:
@@ -158,11 +162,17 @@ class FaceTracker:
         self.prev_gray = gray
         self.tracks = [t for t in self.tracks if index - t.last_seen <= MAX_GAP_FRAMES]
 
-        if self.target is None:
-            active = self.tracks
+        if self.targets is None:
+            active = [(t, 0) for t in self.tracks]
         else:
-            # Only one person was chosen; if two tracks qualify, keep the more similar one.
-            candidates = [t for t in self.tracks if t.is_target]
-            active = [max(candidates, key=lambda t: t.similarity or 0.0)] if candidates else []
+            # Each chosen person appears once per frame; if two tracks claim the same person, keep the
+            # more similar one.
+            best: dict[int, Track] = {}
+            for t in self.tracks:
+                k = t.assigned
+                if k is not None and (k not in best or t.similarities[k] > best[k].similarities[k]):
+                    best[k] = t
+            active = [(t, k) for k, t in best.items()]
         # track_id lets later stages keep per-face temporal state (e.g. enhancement detail).
-        return [Face(bbox=t.bbox, kps=t.stabilizer.kps.copy(), det_score=1.0, track_id=t.id) for t in active]
+        return [Face(bbox=t.bbox, kps=t.stabilizer.kps.copy(), det_score=1.0, track_id=t.id, target=k)
+                for t, k in active]

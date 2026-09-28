@@ -52,19 +52,50 @@ class Processor:
         self.engine = engine
         self.storage = storage
 
-    def _target_embedding(self, job: JobRequest, workdir: str) -> np.ndarray | None:
-        """Centroid embedding of the person the user picked, or None to swap everyone."""
-        if job.faces_key is None or job.target_face_index is None:
+    def _target_embeddings(self, job: JobRequest, workdir: str) -> np.ndarray | None:
+        """(K, 512) centroid embeddings of the chosen people, row k for job.swaps[k]; None = swap everyone."""
+        if job.faces_key is None or any(s.target_face_index is None for s in job.swaps):
             return None
         path = os.path.join(workdir, "faces.json")
         self.storage.download(job.faces_key, path)
         with open(path) as f:
-            faces = json.load(f)["faces"]
-        match = next((f for f in faces if f["index"] == job.target_face_index), None)
-        if match is None:
-            raise JobError("Seçilen kişi bulunamadı, videoyu yeniden yükleyin")
-        emb = np.asarray(match["embedding"], dtype=np.float32)
-        return emb / np.linalg.norm(emb)
+            by_index = {f["index"]: f["embedding"] for f in json.load(f)["faces"]}
+        rows = []
+        for swap in job.swaps:
+            if swap.target_face_index not in by_index:
+                raise JobError("Seçilen kişi bulunamadı, videoyu yeniden yükleyin")
+            emb = np.asarray(by_index[swap.target_face_index], dtype=np.float32)
+            rows.append(emb / np.linalg.norm(emb))
+        return np.stack(rows)
+
+    def _identities(self, job: JobRequest, workdir: str) -> list[np.ndarray]:
+        """Swap latent of each source face, in job.swaps order."""
+        identities = []
+        for k, swap in enumerate(job.swaps):
+            path = os.path.join(workdir, f"face{k}" + os.path.splitext(swap.face_key)[1])
+            self.storage.download(swap.face_key, path)
+            image = cv2.imread(path)
+            if image is None:
+                raise JobError("Yüz fotoğrafı okunamadı")
+            source = self.engine.source_face(image)
+            if source is None:
+                raise JobError("Kaynak fotoğraflardan birinde yüz bulunamadı")
+            if int(source.age) < settings.min_face_age:
+                raise JobError("Kaynak fotoğraftaki kişi reşit olmayan biri gibi görünüyor, işlem yapılamaz")
+            identities.append(self.engine.identity(source))
+        return identities
+
+    def _match_untracked(self, frame: np.ndarray, faces: list[Face], targets: np.ndarray) -> list[Face]:
+        """Per-frame identity matching when tracking is disabled: best detected face per chosen person."""
+        best: dict[int, tuple[float, Face]] = {}
+        for face in faces:
+            sims = targets @ self.engine.embed(frame, face)
+            k = int(np.argmax(sims))
+            if sims[k] >= settings.match_threshold and sims[k] > best.get(k, (-1.0, None))[0]:
+                best[k] = (float(sims[k]), face)
+        for k, (_, face) in best.items():
+            face.target = k
+        return [face for _, face in best.values()]
 
     def run(self, job: JobRequest, on_progress: Callable[[int], None]) -> None:
         workdir = os.path.join(settings.work_dir, job.job_id)
@@ -76,13 +107,10 @@ class Processor:
 
     def _run(self, job: JobRequest, workdir: str, on_progress: Callable[[int], None]) -> None:
         video_path = os.path.join(workdir, "input" + os.path.splitext(job.video_key)[1])
-        face_path = os.path.join(workdir, "face" + os.path.splitext(job.face_key)[1])
         out_path = os.path.join(workdir, "result.mp4")
         thumb_path = os.path.join(workdir, "thumb.jpg")
 
         self.storage.download(job.video_key, video_path)
-        self.storage.download(job.face_key, face_path)
-
         try:
             info = probe(video_path)
         except VideoError as e:
@@ -90,31 +118,23 @@ class Processor:
         if info.duration > settings.max_duration_seconds:
             raise JobError(f"Video en fazla {int(settings.max_duration_seconds)} saniye olabilir")
 
-        face_image = cv2.imread(face_path)
-        if face_image is None:
-            raise JobError("Yüz fotoğrafı okunamadı")
-        source = self.engine.source_face(face_image)
-        if source is None:
-            raise JobError("Kaynak fotoğrafta yüz bulunamadı")
-        if int(source.age) < settings.min_face_age:
-            raise JobError("Kaynak fotoğraftaki kişi reşit olmayan biri gibi görünüyor, işlem yapılamaz")
-
-        identity = self.engine.identity(source)
-        target = self._target_embedding(job, workdir)
+        identities = self._identities(job, workdir)
+        targets = self._target_embeddings(job, workdir)
         watermark = Watermark(settings.watermark_text, info.width, info.height) if settings.watermark_text else None
         age_check_interval = max(1, round(float(info.fps) * AGE_CHECK_EVERY_SECONDS))
         age_checked = False
-        tracker = (FaceTracker(target, settings.match_threshold, settings.keep_threshold, settings.flow_weight)
+        tracker = (FaceTracker(targets, settings.match_threshold, settings.keep_threshold, settings.flow_weight)
                    if settings.temporal_smoothing else None)
 
         def select(index: int, frame: np.ndarray) -> list[Face]:
-            """Which faces to swap in this frame. Runs strictly in frame order because tracking is stateful."""
+            """Which faces to swap in this frame, each tagged with face.target = index into job.swaps.
+            Runs strictly in frame order because tracking is stateful."""
             nonlocal age_checked
             faces = self.engine.detect(frame)
             if tracker is not None:
                 faces = tracker.update(index, frame, faces, lambda f: self.engine.embed(frame, f))
-            elif target is not None:
-                faces = [f for f in faces if float(self.engine.embed(frame, f) @ target) >= settings.match_threshold]
+            elif targets is not None:
+                faces = self._match_untracked(frame, faces, targets)
             if faces and (not age_checked or index % age_check_interval == 0):
                 if any(self.engine.estimate_age(frame, f) < settings.min_face_age for f in faces):
                     raise JobError("Videodaki kişi reşit olmayan biri gibi görünüyor, işlem yapılamaz")
@@ -126,7 +146,7 @@ class Processor:
             The enhancement is pasted later, in frame order, so its detail can be stabilized over time."""
             restorations = []
             for face in faces:
-                self.engine.swap(frame, face.kps, identity)
+                self.engine.swap(frame, face.kps, identities[face.target if face.target is not None else 0])
                 if job.enhance:
                     result = self.engine.restore(frame, face.kps)
                     if result is not None:
@@ -188,7 +208,7 @@ class Processor:
                 drain_one()
 
             if frames_with_faces == 0:
-                raise JobError("Seçilen kişi videoda bulunamadı" if target is not None else "Videoda yüz bulunamadı")
+                raise JobError("Seçilen kişiler videoda bulunamadı" if targets is not None else "Videoda yüz bulunamadı")
             writer.finish()
         except VideoError as e:
             raise JobError(str(e))

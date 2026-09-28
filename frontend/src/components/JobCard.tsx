@@ -8,7 +8,8 @@ const STATUS_LABEL: Record<Job['status'], string> = {
 }
 
 export default function JobCard({ job, onOpen }: { job: Job; onOpen: (job: Job) => void }) {
-  const preview = job.thumbnailUrl ?? job.targetFaceUrl ?? job.faceUrl
+  const first = job.swaps[0]
+  const preview = job.thumbnailUrl ?? first?.targetFaceUrl ?? first?.faceUrl
   return (
     <article className={`job job-${job.status.toLowerCase()}`}>
       <div className="job-thumb">{preview && <img src={preview} alt="" loading="lazy" />}</div>
@@ -16,6 +17,16 @@ export default function JobCard({ job, onOpen }: { job: Job; onOpen: (job: Job) 
         <div className="job-head">
           <span className={`badge badge-${job.status.toLowerCase()}`}>{STATUS_LABEL[job.status]}</span>
           <time className="muted small">{new Date(job.createdAt).toLocaleString('tr-TR')}</time>
+        </div>
+
+        <div className="pairs">
+          {job.swaps.map((s, i) => (
+            <span key={i} className="pair" title={s.targetFaceIndex === null ? 'Herkes' : `Kişi ${s.targetFaceIndex + 1}`}>
+              {s.targetFaceUrl ? <img src={s.targetFaceUrl} alt="" /> : <span className="pair-all">Herkes</span>}
+              <span aria-hidden>→</span>
+              {s.faceUrl && <img src={s.faceUrl} alt="" />}
+            </span>
+          ))}
         </div>
 
         {(job.status === 'QUEUED' || job.status === 'PROCESSING') && (
