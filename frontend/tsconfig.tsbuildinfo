@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/api.ts","./src/auth.tsx","./src/main.tsx","./src/usejobupdates.ts","./src/components/dropzone.tsx","./src/components/jobcard.tsx","./src/pages/authpage.tsx","./src/pages/studio.tsx","./vite.config.ts"],"version":"5.8.3"}
