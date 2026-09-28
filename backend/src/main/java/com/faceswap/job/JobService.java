@@ -9,6 +9,8 @@ import com.faceswap.media.Face;
 import com.faceswap.media.FaceRepository;
 import com.faceswap.media.MediaService;
 import com.faceswap.media.Video;
+import com.faceswap.media.VideoFace;
+import com.faceswap.media.VideoFaceRepository;
 import com.faceswap.media.VideoRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,18 +40,20 @@ public class JobService {
     private final JobLogRepository jobLogs;
     private final VideoRepository videos;
     private final FaceRepository faces;
+    private final VideoFaceRepository videoFaces;
     private final MediaService mediaService;
     private final RabbitTemplate rabbit;
     private final StringRedisTemplate redis;
     private final AppProperties.Limits limits;
 
     public JobService(JobRepository jobs, JobLogRepository jobLogs, VideoRepository videos, FaceRepository faces,
-                      MediaService mediaService, RabbitTemplate rabbit, StringRedisTemplate redis,
-                      AppProperties properties) {
+                      VideoFaceRepository videoFaces, MediaService mediaService, RabbitTemplate rabbit,
+                      StringRedisTemplate redis, AppProperties properties) {
         this.jobs = jobs;
         this.jobLogs = jobLogs;
         this.videos = videos;
         this.faces = faces;
+        this.videoFaces = videoFaces;
         this.mediaService = mediaService;
         this.rabbit = rabbit;
         this.redis = redis;
@@ -70,11 +74,13 @@ public class JobService {
                     "Aynı anda en fazla " + limits.maxActiveJobsPerUser() + " işlem çalıştırabilirsiniz");
         }
 
-        Job job = jobs.save(new Job(userId, video.getId(), face.getId(), req.enhance() == null || req.enhance()));
+        Integer target = resolveTarget(video, req.targetFaceIndex());
+        Job job = jobs.save(new Job(userId, video.getId(), face.getId(), req.enhance() == null || req.enhance(), target));
         jobLogs.save(new JobLog(job.getId(), "INFO", "Job queued"));
 
         var message = new JobRequest(job.getId(), userId, video.getObjectKey(), face.getObjectKey(),
-                resultKey(job), thumbnailKey(job), job.isEnhance());
+                resultKey(job), thumbnailKey(job), job.isEnhance(),
+                target == null ? null : video.facesPrefix() + "faces.json", target);
         // Publish only after commit, otherwise a fast worker could report on a job row that doesn't exist yet.
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
@@ -115,6 +121,35 @@ public class JobService {
         return toDto(job, videos.findById(job.getVideoId()).orElse(null), faces.findById(job.getFaceId()).orElse(null));
     }
 
+    /** Returns the face index to swap, or null to swap every face. */
+    private Integer resolveTarget(Video video, Integer requested) {
+        switch (video.getAnalysisStatus()) {
+            case PENDING -> throw new ApiException(HttpStatus.CONFLICT,
+                    "Videodaki yüzler hâlâ analiz ediliyor, birkaç saniye sonra tekrar deneyin");
+            case FAILED -> {
+                // Without analysis there is nothing to pick from; fall back to swapping everyone.
+                if (requested != null) {
+                    throw ApiException.badRequest("Bu video için kişi seçimi yapılamıyor");
+                }
+                return null;
+            }
+            default -> {
+                List<VideoFace> found = videoFaces.findByVideoIdOrderByFaceIndex(video.getId());
+                if (found.isEmpty()) {
+                    throw ApiException.badRequest("Videoda yüz bulunamadı");
+                }
+                if (requested == null) {
+                    // A single person is always the target; matching by identity also skips stray detections.
+                    return found.size() == 1 ? found.get(0).getFaceIndex() : null;
+                }
+                if (found.stream().noneMatch(f -> f.getFaceIndex() == requested)) {
+                    throw ApiException.badRequest("Seçilen kişi bu videoda yok");
+                }
+                return requested;
+            }
+        }
+    }
+
     static String resultKey(Job job) {
         return "results/" + job.getUserId() + "/" + job.getId() + ".mp4";
     }
@@ -144,10 +179,13 @@ public class JobService {
             }
         }
         long uid = job.getUserId();
+        String targetUrl = video == null || job.getTargetFaceIndex() == null ? null
+                : mediaService.mediaUrl(uid, video.facesPrefix() + job.getTargetFaceIndex() + ".jpg");
         return new JobDto(job.getId(), job.getStatus(), progress, job.isEnhance(), job.getErrorMessage(),
                 job.getVideoId(), job.getFaceId(),
                 video == null ? null : mediaService.mediaUrl(uid, video.getObjectKey()),
                 face == null ? null : mediaService.mediaUrl(uid, face.getObjectKey()),
+                job.getTargetFaceIndex(), targetUrl,
                 mediaService.mediaUrl(uid, job.getResultKey()),
                 mediaService.mediaUrl(uid, job.getThumbnailKey()),
                 job.getCreatedAt(), job.getStartedAt(), job.getFinishedAt());

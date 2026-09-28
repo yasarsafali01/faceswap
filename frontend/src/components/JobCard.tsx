@@ -8,7 +8,7 @@ const STATUS_LABEL: Record<Job['status'], string> = {
 }
 
 export default function JobCard({ job, onOpen }: { job: Job; onOpen: (job: Job) => void }) {
-  const preview = job.thumbnailUrl ?? job.faceUrl
+  const preview = job.thumbnailUrl ?? job.targetFaceUrl ?? job.faceUrl
   return (
     <article className={`job job-${job.status.toLowerCase()}`}>
       <div className="job-thumb">{preview && <img src={preview} alt="" loading="lazy" />}</div>

@@ -133,12 +133,14 @@ class FrameWriter:
         else:
             codec = ["-c:v", "libx264", "-preset", "medium", "-crf", str(settings.video_crf)]
         audio = ["-map", "1:a:0?", "-c:a", "aac", "-b:a", "192k"] if info.has_audio else []
+        # Machine-readable disclosure of synthetic content, invisible in the picture itself.
+        tag = ["-metadata", f"comment={settings.ai_metadata_tag}"] if settings.ai_metadata_tag else []
         self.stderr = tempfile.TemporaryFile()
         self.proc = subprocess.Popen(
             ["ffmpeg", "-nostdin", "-y", "-v", "error",
              "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{info.width}x{info.height}", "-r", str(info.fps),
              "-i", "pipe:0", "-i", source_path,
-             "-map", "0:v:0", *audio, *codec, "-pix_fmt", "yuv420p",
+             "-map", "0:v:0", *audio, *codec, "-pix_fmt", "yuv420p", "-map_metadata", "-1", *tag,
              "-shortest", "-movflags", "+faststart", out_path],
             stdin=subprocess.PIPE, stderr=self.stderr,
         )

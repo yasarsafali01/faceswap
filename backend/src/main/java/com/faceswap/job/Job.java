@@ -34,6 +34,9 @@ public class Job {
 
     private boolean enhance = true;
 
+    @Column(name = "target_face_index")
+    private Integer targetFaceIndex;
+
     @Column(name = "result_key")
     private String resultKey;
 
@@ -58,13 +61,18 @@ public class Job {
     protected Job() {
     }
 
-    public Job(Long userId, UUID videoId, UUID faceId, boolean enhance) {
+    public Job(Long userId, UUID videoId, UUID faceId, boolean enhance, Integer targetFaceIndex) {
         this.id = UUID.randomUUID();
         this.userId = userId;
         this.videoId = videoId;
         this.faceId = faceId;
         this.enhance = enhance;
+        this.targetFaceIndex = targetFaceIndex;
         this.consentAt = Instant.now();
+    }
+
+    public Integer getTargetFaceIndex() {
+        return targetFaceIndex;
     }
 
     public void markProcessing() {

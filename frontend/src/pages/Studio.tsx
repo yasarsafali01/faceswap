@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useState } from 'react'
-import { api, type Job, type MediaFile } from '../api'
+import { api, type Job, type MediaFile, type Video } from '../api'
 import { useAuth } from '../auth'
 import Dropzone from '../components/Dropzone'
+import FacePicker, { type Target } from '../components/FacePicker'
 import JobCard from '../components/JobCard'
 import { useJobUpdates } from '../useJobUpdates'
 
 export default function Studio() {
   const { user, logout } = useAuth()
-  const [video, setVideo] = useState<MediaFile | null>(null)
+  const [video, setVideo] = useState<Video | null>(null)
+  const [target, setTarget] = useState<Target>(null)
   const [face, setFace] = useState<MediaFile | null>(null)
   const [consent, setConsent] = useState(false)
   const [enhance, setEnhance] = useState(true)
@@ -34,6 +36,34 @@ export default function Studio() {
     void loadJobs()
   }, [loadJobs])
 
+  // The worker analyzes each uploaded video to find the people in it; poll until it's done.
+  const videoId = video?.id
+  const analyzing = video?.analysisStatus === 'PENDING'
+  useEffect(() => {
+    if (!videoId || !analyzing) return
+    const t = setInterval(async () => {
+      try {
+        const updated = await api<Video>(`/api/videos/${videoId}`)
+        if (updated.analysisStatus === 'PENDING') return
+        setVideo(updated)
+        setTarget(updated.faces.length === 1 ? updated.faces[0].index : null)
+      } catch {
+        // Transient errors: keep polling.
+      }
+    }, 1500)
+    return () => clearInterval(t)
+  }, [videoId, analyzing])
+
+  function changeVideo(v: Video | null) {
+    setVideo(v)
+    setTarget(null)
+  }
+
+  const targetReady =
+    video?.analysisStatus === 'FAILED' ||
+    (video?.analysisStatus === 'READY' && video.faces.length > 0 && target !== null)
+  const canStart = !!video && !!face && consent && targetReady && !starting
+
   // Fall back to polling only while the socket is down and something is still running.
   const hasActive = jobs.some((j) => j.status === 'QUEUED' || j.status === 'PROCESSING')
   useEffect(() => {
@@ -49,7 +79,13 @@ export default function Studio() {
     try {
       const job = await api<Job>('/api/jobs/start', {
         method: 'POST',
-        body: JSON.stringify({ videoId: video.id, faceId: face.id, consent, enhance }),
+        body: JSON.stringify({
+          videoId: video.id,
+          faceId: face.id,
+          consent,
+          enhance,
+          targetFaceIndex: typeof target === 'number' ? target : null,
+        }),
       })
       setJobs((list) => [job, ...list.filter((j) => j.id !== job.id)])
       setConsent(false)
@@ -82,7 +118,7 @@ export default function Studio() {
               hint="MP4, MOV, WEBM · en fazla 200 MB · 3 dakika"
               accept="video/mp4,video/quicktime,video/webm,video/x-matroska"
               value={video}
-              onChange={setVideo}
+              onChange={changeVideo}
             />
             <Dropzone
               kind="face"
@@ -93,6 +129,8 @@ export default function Studio() {
               onChange={setFace}
             />
           </div>
+
+          {video && <FacePicker video={video} value={target} onChange={setTarget} />}
 
           <div className="options">
             <label className="check">
@@ -106,13 +144,13 @@ export default function Studio() {
               <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} />
               <span>
                 Videodaki ve fotoğraftaki kişilerin iznine sahibim
-                <small className="muted">Rızası olmadan birinin yüzünü kullanmak yasaktır. Çıktılar “AI GENERATED” filigranı taşır.</small>
+                <small className="muted">Rızası olmadan birinin yüzünü kullanmak yasaktır.</small>
               </span>
             </label>
           </div>
 
           {error && <p className="error" role="alert">{error}</p>}
-          <button className="primary wide" disabled={!video || !face || !consent || starting} onClick={() => void start()}>
+          <button className="primary wide" disabled={!canStart} onClick={() => void start()}>
             {starting ? 'Başlatılıyor…' : 'Yüz değiştirmeyi başlat'}
           </button>
         </section>

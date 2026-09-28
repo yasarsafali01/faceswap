@@ -1,4 +1,5 @@
 """Runs one face swap job end to end: download -> probe -> per-frame swap/enhance -> encode -> upload."""
+import json
 import logging
 import os
 import shutil
@@ -49,6 +50,20 @@ class Processor:
         self.engine = engine
         self.storage = storage
 
+    def _target_embedding(self, job: JobRequest, workdir: str) -> np.ndarray | None:
+        """Centroid embedding of the person the user picked, or None to swap everyone."""
+        if job.faces_key is None or job.target_face_index is None:
+            return None
+        path = os.path.join(workdir, "faces.json")
+        self.storage.download(job.faces_key, path)
+        with open(path) as f:
+            faces = json.load(f)["faces"]
+        match = next((f for f in faces if f["index"] == job.target_face_index), None)
+        if match is None:
+            raise JobError("Seçilen kişi bulunamadı, videoyu yeniden yükleyin")
+        emb = np.asarray(match["embedding"], dtype=np.float32)
+        return emb / np.linalg.norm(emb)
+
     def run(self, job: JobRequest, on_progress: Callable[[int], None]) -> None:
         workdir = os.path.join(settings.work_dir, job.job_id)
         os.makedirs(workdir, exist_ok=True)
@@ -83,6 +98,7 @@ class Processor:
             raise JobError("Kaynak fotoğraftaki kişi reşit olmayan biri gibi görünüyor, işlem yapılamaz")
 
         identity = self.engine.identity(source)
+        target = self._target_embedding(job, workdir)
         watermark = Watermark(settings.watermark_text, info.width, info.height) if settings.watermark_text else None
         age_check_interval = max(1, round(float(info.fps) * AGE_CHECK_EVERY_SECONDS))
         # Set once any frame with faces passed the age check; a race here only means an extra check.
@@ -91,6 +107,8 @@ class Processor:
         def process(index: int, frame: np.ndarray) -> tuple[np.ndarray, int]:
             nonlocal age_checked
             faces = self.engine.detect(frame)
+            if target is not None:
+                faces = [f for f in faces if float(self.engine.embed(frame, f) @ target) >= settings.match_threshold]
             if faces and (not age_checked or index % age_check_interval == 0):
                 if any(self.engine.estimate_age(frame, f) < settings.min_face_age for f in faces):
                     raise JobError("Videodaki kişi reşit olmayan biri gibi görünüyor, işlem yapılamaz")
@@ -140,7 +158,7 @@ class Processor:
                 drain_one()
 
             if frames_with_faces == 0:
-                raise JobError("Videoda yüz bulunamadı")
+                raise JobError("Seçilen kişi videoda bulunamadı" if target is not None else "Videoda yüz bulunamadı")
             writer.finish()
         except VideoError as e:
             raise JobError(str(e))
@@ -152,6 +170,7 @@ class Processor:
             reader.close()
 
         elapsed = time.monotonic() - started
+        log.info("Job %s: faces swapped in %d of %d frames", job.job_id, frames_with_faces, index)
         log.info("Job %s rendered %d frames in %.1fs (%.1f fps)", job.job_id, total, elapsed, total / max(elapsed, 1e-6))
         self.storage.upload(job.result_key, out_path, "video/mp4")
         self.storage.upload(job.thumbnail_key, thumb_path, "image/jpeg")

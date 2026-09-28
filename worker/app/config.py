@@ -39,7 +39,16 @@ class Settings:
     # Faces whose estimated age is below this are refused. Age estimation is noisy, so this is a
     # safety net on top of the consent step, not a verification.
     min_face_age: int = field(default_factory=lambda: int(_env("MIN_FACE_AGE", "18")))
-    watermark_text: str = field(default_factory=lambda: _env("WATERMARK_TEXT", "AI GENERATED"))
+    # Visible watermark is off by default; outputs are always tagged in the file metadata instead.
+    watermark_text: str = field(default_factory=lambda: _env("WATERMARK_TEXT", ""))
+    ai_metadata_tag: str = field(default_factory=lambda: _env("AI_METADATA_TAG", "AI-generated content (FaceSwap)"))
+
+    # Cosine similarity of ArcFace embeddings. Same person across poses is usually > 0.4,
+    # different people rarely exceed 0.2; matching is looser than clustering to survive profile views.
+    cluster_threshold: float = field(default_factory=lambda: float(_env("CLUSTER_THRESHOLD", "0.4")))
+    match_threshold: float = field(default_factory=lambda: float(_env("MATCH_THRESHOLD", "0.3")))
+    analysis_samples_per_second: float = field(default_factory=lambda: float(_env("ANALYSIS_SAMPLES_PER_SECOND", "2")))
+    analysis_max_samples: int = field(default_factory=lambda: int(_env("ANALYSIS_MAX_SAMPLES", "120")))
 
 
 settings = Settings()

@@ -9,6 +9,14 @@ export type MediaFile = {
   url: string
 }
 
+export type VideoFace = { index: number; url: string; occurrences: number }
+
+export type Video = MediaFile & {
+  analysisStatus: 'PENDING' | 'READY' | 'FAILED'
+  analysisError: string | null
+  faces: VideoFace[]
+}
+
 export type JobStatus = 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'FAILED'
 
 export type Job = {
@@ -21,6 +29,8 @@ export type Job = {
   faceId: string
   videoUrl: string | null
   faceUrl: string | null
+  targetFaceIndex: number | null
+  targetFaceUrl: string | null
   resultUrl: string | null
   thumbnailUrl: string | null
   createdAt: string
@@ -114,7 +124,7 @@ export async function api<T>(path: string, init: RequestInit = {}, retry = true)
 }
 
 /** Multipart upload via XHR, because fetch has no upload progress events. */
-export function upload(path: string, file: File, onProgress: (pct: number) => void, retry = true): Promise<MediaFile> {
+export function upload<T = MediaFile>(path: string, file: File, onProgress: (pct: number) => void, retry = true): Promise<T> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
     xhr.open('POST', path)
@@ -124,16 +134,16 @@ export function upload(path: string, file: File, onProgress: (pct: number) => vo
     xhr.onerror = () => reject(new ApiError(0, 'Bağlantı hatası'))
     xhr.onload = async () => {
       if (xhr.status === 401 && retry && token && (await refreshSession())) {
-        upload(path, file, onProgress, false).then(resolve, reject)
+        upload<T>(path, file, onProgress, false).then(resolve, reject)
         return
       }
-      let body: { message?: string } | MediaFile | null = null
+      let body: { message?: string } | T | null = null
       try {
         body = JSON.parse(xhr.responseText)
       } catch {
         // Non-JSON error bodies (e.g. nginx 413 page) fall through to the status text below.
       }
-      if (xhr.status >= 200 && xhr.status < 300) resolve(body as MediaFile)
+      if (xhr.status >= 200 && xhr.status < 300) resolve(body as T)
       else {
         const msg = (body as { message?: string } | null)?.message
         reject(new ApiError(xhr.status, msg ?? (xhr.status === 413 ? 'Dosya çok büyük' : 'Yükleme başarısız')))

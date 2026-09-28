@@ -1,16 +1,16 @@
 import { useRef, useState, type DragEvent } from 'react'
 import { upload, type MediaFile } from '../api'
 
-type Props = {
+type Props<T extends MediaFile> = {
   kind: 'video' | 'face'
   title: string
   hint: string
   accept: string
-  value: MediaFile | null
-  onChange: (file: MediaFile | null) => void
+  value: T | null
+  onChange: (file: T | null) => void
 }
 
-export default function Dropzone({ kind, title, hint, accept, value, onChange }: Props) {
+export default function Dropzone<T extends MediaFile>({ kind, title, hint, accept, value, onChange }: Props<T>) {
   const input = useRef<HTMLInputElement>(null)
   const [progress, setProgress] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -22,7 +22,7 @@ export default function Dropzone({ kind, title, hint, accept, value, onChange }:
     setProgress(0)
     try {
       const path = kind === 'video' ? '/api/videos/upload' : '/api/faces/upload'
-      onChange(await upload(path, file, setProgress))
+      onChange(await upload<T>(path, file, setProgress))
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Yükleme başarısız')
     } finally {

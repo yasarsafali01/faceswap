@@ -150,6 +150,11 @@ class FaceEngine:
             return []
         return [Face(bbox=b[:4], kps=k, det_score=b[4]) for b, k in zip(bboxes, kpss)]
 
+    def embed(self, frame: np.ndarray, face: Face) -> np.ndarray:
+        """Unit-length ArcFace identity embedding of a detected face."""
+        emb = self.analyzer.models["recognition"].get(frame, face)
+        return emb / np.linalg.norm(emb)
+
     def estimate_age(self, frame: np.ndarray, face: Face) -> int:
         self.analyzer.models["genderage"].get(frame, face)
         return int(face.age)
