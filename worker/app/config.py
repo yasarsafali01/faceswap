@@ -47,6 +47,15 @@ class Settings:
     # different people rarely exceed 0.2; matching is looser than clustering to survive profile views.
     cluster_threshold: float = field(default_factory=lambda: float(_env("CLUSTER_THRESHOLD", "0.4")))
     match_threshold: float = field(default_factory=lambda: float(_env("MATCH_THRESHOLD", "0.3")))
+    # Once a tracked face is recognized as the chosen person it stays chosen down to this similarity,
+    # so profile or blurred frames don't flash the original face.
+    keep_threshold: float = field(default_factory=lambda: float(_env("KEEP_THRESHOLD", "0.15")))
+    temporal_smoothing: bool = field(default_factory=lambda: _env("TEMPORAL_SMOOTHING", "true").lower() == "true")
+    # Landmark stabilization strength (0 = raw detections, closer to 1 = smoother).
+    flow_weight: float = field(default_factory=lambda: float(_env("FLOW_WEIGHT", "0.7")))
+    # Share of the current frame in the GFPGAN detail layer (1 = no temporal smoothing). GFPGAN
+    # re-invents skin texture every frame, which was ~75% of the remaining flicker.
+    enhancer_temporal: float = field(default_factory=lambda: float(_env("ENHANCER_TEMPORAL", "0.5")))
     analysis_samples_per_second: float = field(default_factory=lambda: float(_env("ANALYSIS_SAMPLES_PER_SECOND", "2")))
     analysis_max_samples: int = field(default_factory=lambda: int(_env("ANALYSIS_MAX_SAMPLES", "120")))
 

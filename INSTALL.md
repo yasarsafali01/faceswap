@@ -44,6 +44,10 @@ Worker ayarları (`compose.yml` içinde `worker.environment` altına eklenebilir
 | `AI_METADATA_TAG` | AI-generated content (FaceSwap) | Çıktının metadata `comment` etiketi; boş bırakılırsa yazılmaz |
 | `CLUSTER_THRESHOLD` | 0.4 | Analizde iki yüzü aynı kişi saymak için ArcFace benzerliği |
 | `MATCH_THRESHOLD` | 0.3 | Render'da bir yüzü seçilen kişi saymak için benzerlik (düşük = profil açıları da yakalanır) |
+| `KEEP_THRESHOLD` | 0.15 | Seçilen kişi olarak tanınmış bir yüzün, bu benzerliğe düşene kadar seçili kalması |
+| `TEMPORAL_SMOOTHING` | true | Yüz takibi, landmark stabilizasyonu ve GFPGAN detay yumuşatması (titreme azaltma) |
+| `FLOW_WEIGHT` | 0.7 | Landmark stabilizasyon gücü (0 = ham tespit, 1'e yakın = daha yumuşak) |
+| `ENHANCER_TEMPORAL` | 0.5 | GFPGAN detayında güncel karenin payı (1 = yumuşatma yok; düşük = daha az titreme, hızlı mimikte gölge riski) |
 | `ANALYSIS_SAMPLES_PER_SECOND` | 2 | Kişi analizinde saniye başına örnek kare |
 | `ANALYSIS_MAX_SAMPLES` | 120 | Kişi analizinde en fazla örnek kare |
 

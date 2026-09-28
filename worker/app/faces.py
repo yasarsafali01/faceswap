@@ -169,12 +169,23 @@ class FaceEngine:
         swapped = (out.transpose(1, 2, 0).clip(0, 1) * 255).astype(np.uint8)[:, :, ::-1]
         _paste_back(frame, swapped, matrix, self.swap_mask)
 
-    def enhance(self, frame: np.ndarray, kps: np.ndarray) -> None:
+    def restore(self, frame: np.ndarray, kps: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+        """Runs GFPGAN on the aligned face. Returns (detail, crop, matrix) where detail is what GFPGAN
+        added on top of the aligned crop; pasting is separate so callers can stabilize detail over time."""
         matrix = _align(kps, FFHQ_512)
         if matrix is None:
-            return
+            return None
         crop = cv2.warpAffine(frame, matrix, (512, 512), borderMode=cv2.BORDER_REPLICATE)
         x = (crop[:, :, ::-1].astype(np.float32) / 127.5 - 1.0).transpose(2, 0, 1)[None]
         y = self.gfpgan.run(None, {self.gfpgan_input: np.ascontiguousarray(x)})[0][0]
-        restored = ((y.transpose(1, 2, 0).clip(-1, 1) + 1) * 127.5).astype(np.uint8)[:, :, ::-1]
+        restored = ((y.transpose(1, 2, 0).clip(-1, 1) + 1) * 127.5)[:, :, ::-1]
+        return restored - crop.astype(np.float32), crop, matrix
+
+    def paste_restored(self, frame: np.ndarray, detail: np.ndarray, crop: np.ndarray, matrix: np.ndarray) -> None:
+        restored = (crop.astype(np.float32) + detail).clip(0, 255).astype(np.uint8)
         _paste_back(frame, restored, matrix, self.enhance_mask, settings.enhancer_blend)
+
+    def enhance(self, frame: np.ndarray, kps: np.ndarray) -> None:
+        result = self.restore(frame, kps)
+        if result is not None:
+            self.paste_restored(frame, *result)

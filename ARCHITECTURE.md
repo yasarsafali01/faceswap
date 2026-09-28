@@ -76,11 +76,19 @@ Hedef kişi kuralları (`JobService.resolveTarget`): analiz sürerken başlatma 
 1. Video + kaynak yüz MinIO'dan indirilir, `ffprobe` ile süre/fps/rotasyon okunur (limit: 180 sn, 1080p, 60 fps).
 2. Kaynak yüz: InsightFace `buffalo_l` (detection + ArcFace embedding + yaş). Sıkı kırpılmış fotoğrafta kenar boşluğu eklenip tekrar denenir. Embedding inswapper latent'ine bir kez projekte edilir. Hedef kişi seçildiyse `faces.json`dan o kişinin merkez embedding'i yüklenir.
 3. FFmpeg kareleri pipe ile raw BGR olarak verir (diske frame yazılmaz, reader ayrı thread'de).
-4. Her kare (3 kare paralel, sıra korunarak): SCRFD detection -> (hedef varsa her yüzün ArcFace embedding'i, benzerlik >= `MATCH_THRESHOLD` 0.3 olanlar) -> ArcFace hizalama -> **inswapper_128 fp16** -> bölgesel yumuşak maske ile paste-back -> opsiyonel **GFPGAN 1.4** (FFHQ hizalama, %80 blend). Görünür filigran varsayılan kapalı (`WATERMARK_TEXT`).
-5. FFmpeg tek geçişte H.264 (CRF 18) encode eder, orijinal sesi (AAC) geri ekler, kaynak metadata'yı siler ve `comment=AI-generated content (FaceSwap)` etiketini yazar, `+faststart`.
-6. Sonuç ve thumbnail MinIO'ya yüklenir.
+4. **Sıralı aşama (ana thread, kare sırasıyla):** SCRFD detection -> yüz takibi (`worker/app/tracking.py`):
+   - Yüzler IoU ile kareler arası eşlenir; eşleşmeyen yüz yeni track (sahne kesmesinde durum taşınmaz).
+   - Landmark'lar **optik akışla stabilize** edilir: yüz bölgesinin kareler arası hareketi (LK flow + benzerlik dönüşümü) ölçülür, önceki tahmin bu hareketle taşınıp yeni tespitle %70/%30 harmanlanır. Düz alçak geçiren filtre (One Euro) sarsıntılı kamerada geride kaldığı için denendi ve reddedildi.
+   - Hedef kişi seçildiyse kimlik histerezisi: track `MATCH_THRESHOLD` (0.3) ile hedef olur, `KEEP_THRESHOLD` (0.15) altına düşene kadar hedef kalır; ArcFace 5 karede bir yeniden çalışır.
+   - 1–3 karelik tespit kayıpları yüz hareketle taşınarak doldurulur (orijinal yüz "yanıp sönmez").
+5. **Paralel aşama (3 thread):** ArcFace hizalama -> **inswapper_128 fp16** -> bölgesel yumuşak maske ile paste-back -> opsiyonel **GFPGAN 1.4** inference (FFHQ hizalama).
+6. **Sıralı yazma:** GFPGAN'ın eklediği detay katmanı track başına önceki kareyle harmanlanır (`ENHANCER_TEMPORAL` 0.5), %80 blend ile yapıştırılır. Görünür filigran varsayılan kapalı (`WATERMARK_TEXT`).
+7. FFmpeg tek geçişte H.264 (CRF 18) encode eder, orijinal sesi (AAC) geri ekler, kaynak metadata'yı siler ve `comment=AI-generated content (FaceSwap)` etiketini yazar, `+faststart`.
+8. Sonuç ve thumbnail MinIO'ya yüklenir.
 
-Ölçülen hız (RTX 5060, 6 yüzlü 1280x886 video): iyileştirme açık 2.7 fps, kapalı 11.3 fps; 6 kişiden 1'i seçilip iyileştirme açıkken 11.3 fps. Analiz 6 sn'lik videoda 2.2 sn. Yüz başına GPU süresi yaklaşık 16 ms (swap) ve 47 ms (GFPGAN), tek yüzlü videoda iyileştirmeyle yaklaşık 14 fps.
+Titreme ölçümü (sarsıntılı sentetik klip, optik akışla hareket telafili kareler arası hata, swap'ın orijinale eklediği fazlalık): eski kare-bağımsız pipeline 0.97 -> akış stabilizasyonu 0.65 -> + GFPGAN detay yumuşatması 0.54 (−%44). İyileştirme kapalıyken 0.15; kalan titremenin çoğu GFPGAN'ın her karede dokuyu yeniden üretmesinden geliyor.
+
+Ölçülen hız (RTX 5060, 6 yüzlü 1280x886 video): iyileştirme açık 2.7 fps, kapalı 11.3 fps; 6 kişiden 1'i seçilip iyileştirme ve takip açıkken 12.5 fps. Analiz 6 sn'lik videoda 2.2 sn. Yüz başına GPU süresi yaklaşık 16 ms (swap) ve 47 ms (GFPGAN), tek yüzlü videoda iyileştirmeyle yaklaşık 14 fps.
 
 ## API
 

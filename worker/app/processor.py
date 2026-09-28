@@ -10,11 +10,13 @@ from typing import Callable
 
 import cv2
 import numpy as np
+from insightface.app.common import Face
 
 from .config import settings
 from .faces import FaceEngine
 from .messages import JobRequest
 from .storage import Storage
+from .tracking import FaceTracker
 from .video import FrameReader, FrameWriter, VideoError, probe
 
 log = logging.getLogger(__name__)
@@ -101,25 +103,52 @@ class Processor:
         target = self._target_embedding(job, workdir)
         watermark = Watermark(settings.watermark_text, info.width, info.height) if settings.watermark_text else None
         age_check_interval = max(1, round(float(info.fps) * AGE_CHECK_EVERY_SECONDS))
-        # Set once any frame with faces passed the age check; a race here only means an extra check.
         age_checked = False
+        tracker = (FaceTracker(target, settings.match_threshold, settings.keep_threshold, settings.flow_weight)
+                   if settings.temporal_smoothing else None)
 
-        def process(index: int, frame: np.ndarray) -> tuple[np.ndarray, int]:
+        def select(index: int, frame: np.ndarray) -> list[Face]:
+            """Which faces to swap in this frame. Runs strictly in frame order because tracking is stateful."""
             nonlocal age_checked
             faces = self.engine.detect(frame)
-            if target is not None:
+            if tracker is not None:
+                faces = tracker.update(index, frame, faces, lambda f: self.engine.embed(frame, f))
+            elif target is not None:
                 faces = [f for f in faces if float(self.engine.embed(frame, f) @ target) >= settings.match_threshold]
             if faces and (not age_checked or index % age_check_interval == 0):
                 if any(self.engine.estimate_age(frame, f) < settings.min_face_age for f in faces):
                     raise JobError("Videodaki kişi reşit olmayan biri gibi görünüyor, işlem yapılamaz")
                 age_checked = True
+            return faces
+
+        def render(frame: np.ndarray, faces: list[Face]) -> tuple[np.ndarray, int, list]:
+            """Stateless per-frame work, safe to run out of order: swap, and GFPGAN inference if enabled.
+            The enhancement is pasted later, in frame order, so its detail can be stabilized over time."""
+            restorations = []
             for face in faces:
                 self.engine.swap(frame, face.kps, identity)
                 if job.enhance:
-                    self.engine.enhance(frame, face.kps)
+                    result = self.engine.restore(frame, face.kps)
+                    if result is not None:
+                        restorations.append((face.track_id, *result))
+            return frame, len(faces), restorations
+
+        # Per-track GFPGAN detail from the previous frame, in aligned face space.
+        detail_state: dict[int, tuple[np.ndarray, int]] = {}
+        blend_now = settings.enhancer_temporal if settings.temporal_smoothing else 1.0
+
+        def finish(frame: np.ndarray, restorations: list, frame_index: int) -> None:
+            for track_id, detail, crop, matrix in restorations:
+                prev = detail_state.get(track_id) if track_id is not None else None
+                if prev is not None and frame_index - prev[1] == 1:
+                    detail = blend_now * detail + (1 - blend_now) * prev[0]
+                if track_id is not None:
+                    detail_state[track_id] = (detail, frame_index)
+                self.engine.paste_restored(frame, detail, crop, matrix)
+            for stale in [k for k, (_, seen) in detail_state.items() if frame_index - seen > 1]:
+                del detail_state[stale]
             if watermark:
                 watermark.apply(frame)
-            return frame, len(faces)
 
         total = info.frame_count
         mid = total // 2
@@ -129,16 +158,17 @@ class Processor:
 
         reader = FrameReader(video_path, info)
         writer = FrameWriter(out_path, video_path, info)
-        # Several frames in flight so one frame's CPU work (alignment, blending) overlaps another's GPU
-        # inference; results are consumed strictly in submission order to keep frames in sequence.
+        # Detection and tracking run in order on this thread; the heavy swap/enhance work of several frames
+        # runs in parallel so CPU blending overlaps GPU inference. Results are consumed in submission order.
         pool = ThreadPoolExecutor(max_workers=settings.frame_workers)
         pending: deque[Future] = deque()
         index = 0
 
         def drain_one() -> None:
             nonlocal frames_with_faces, last_progress, last_emit, index
-            frame, face_count = pending.popleft().result()
+            frame, face_count, restorations = pending.popleft().result()
             frames_with_faces += face_count > 0
+            finish(frame, restorations, index)
             writer.write(frame)
             if index == 0 or index == mid:
                 cv2.imwrite(thumb_path, frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
@@ -151,7 +181,7 @@ class Processor:
 
         try:
             for submitted, frame in enumerate(reader):
-                pending.append(pool.submit(process, submitted, frame))
+                pending.append(pool.submit(render, frame, select(submitted, frame)))
                 if len(pending) >= settings.frame_workers * 2:
                     drain_one()
             while pending:
